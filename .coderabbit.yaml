@@ -1,0 +1,6 @@
+language: pt-BR
+tone_instructions: "Revise em pt-BR. Rigor no fato: aponte bugs, falhas de seguranca e dados sensiveis (IP interno, segredo, dado de cliente) com evidencia (arquivo:linha). Nao seja condescendente; sinalize problema real, mesmo pequeno."
+reviews:
+  profile: assertive
+  path_filters:
+    - "!**/*.lock"
