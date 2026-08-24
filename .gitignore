@@ -1,5 +1,6 @@
 node_modules/
 CLAUDE.md
+AGENTS.md
 .env
 .env.*
 *.key
