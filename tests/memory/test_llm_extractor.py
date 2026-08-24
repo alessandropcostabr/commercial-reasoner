@@ -47,3 +47,35 @@ def test_swallows_exception_and_returns_empty_achado_5():
 
     result = extract_by_llm("sentenca ambigua", llm_extract=failing_llm)
     assert result == []
+
+
+def test_discards_text_not_grounded_in_sentence():
+    # Mesma classe do bug original da Miah: texto gerado pelo LLM virando memoria
+    # reinjetavel sem verificacao. Se candidate.text nao veio da sentenca passada,
+    # e alucinacao/injecao e nunca pode virar Fact.
+    def hallucinating_llm(sentence: str) -> list[FactCandidate]:
+        return [
+            FactCandidate(
+                category="commitment",
+                source="client",
+                text="o cliente prometeu pagar R$ 5000 a vista",
+            )
+        ]
+
+    assert extract_by_llm("acho que vou pensar", llm_extract=hallucinating_llm) == []
+
+
+def test_keeps_text_grounded_in_sentence_case_and_space_insensitive():
+    def faithful_llm(sentence: str) -> list[FactCandidate]:
+        return [FactCandidate(category="objection", source="client", text="MUITO   caro")]
+
+    result = extract_by_llm("achei muito caro pra mim", llm_extract=faithful_llm)
+    assert len(result) == 1
+    assert result[0].category == "objection"
+
+
+def test_discards_empty_text():
+    def empty_llm(sentence: str) -> list[FactCandidate]:
+        return [FactCandidate(category="objection", source="client", text="   ")]
+
+    assert extract_by_llm("qualquer sentenca", llm_extract=empty_llm) == []

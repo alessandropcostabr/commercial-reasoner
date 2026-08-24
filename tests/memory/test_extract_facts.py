@@ -183,11 +183,13 @@ def test_llm_failure_does_not_block_extraction():
 
 
 def test_llm_extracts_ambiguous_sentence_when_provided():
+    # O candidato do LLM precisa ser ancorado na fala do cliente (substring da
+    # sentenca) - texto interpretativo/inventado nunca vira Fact (anti-injecao).
     def fake_llm(sentence: str):
-        return [FactCandidate(category="objection", source="client", text="hesitacao detectada pelo LLM")]
+        return [FactCandidate(category="objection", source="client", text="pensar com calma")]
 
     turn = Turn(client_message="Vou pensar com calma sobre isso.", agent_response="Sem problema!")
     result = extract_facts(turn, _facts(), llm_extract=fake_llm)
 
-    llm_facts = [f for f in result.facts if f.text == "hesitacao detectada pelo LLM"]
+    llm_facts = [f for f in result.facts if f.text == "pensar com calma"]
     assert len(llm_facts) == 1
