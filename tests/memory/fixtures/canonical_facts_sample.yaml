@@ -1,0 +1,26 @@
+prices:
+  - modality: upfront
+    value: 1200
+    description: "PIX ou boleto a vista (25% de desconto)"
+  - modality: card_installment
+    value: 120
+    description: "10x de R$120 no cartao"
+  - modality: card_total
+    value: 1200
+    description: "10x de R$120 = total R$1200"
+  - modality: installment_plan_downpayment
+    value: 250
+    description: "entrada do boleto parcelado"
+  - modality: installment_plan_installment
+    value: 250
+    description: "5x de R$250 do boleto parcelado"
+  - modality: installment_plan_total
+    value: 1500
+    description: "total do boleto parcelado (250 entrada + 5x250, 10% off)"
+other_numbers:
+  - 30
+  - 10
+  - 80
+  - 16
+  - 75
+  - 7
