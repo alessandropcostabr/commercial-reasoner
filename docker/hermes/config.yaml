@@ -1,0 +1,41 @@
+# Agente Fase 1 - config do Hermes (montado em /opt/data/config.yaml).
+# Cerebro = Qwen via OpenRouter. Memoria = hooks shell -> cmem (/v1/*).
+#
+# NOTA: o YAML do Hermes NAO interpola ${ENV}. O slug do modelo abaixo e
+# literal (trocavel editando aqui ou via `hermes model ... --global`).
+# Confirmar o slug Qwen no catalogo OpenRouter (pricing/tool-calling no dia).
+
+model:
+  provider: openrouter
+  default: qwen/qwen3-235b-a22b-2507   # slug valido do catalogo OpenRouter (tools=true, ~$0.09/M)
+  base_url: ''            # vazio => Hermes injeta https://openrouter.ai/api/v1
+  api_mode: chat_completions
+
+# OPENROUTER_API_KEY vem por env/.env (credential_pool.py:1775). Nunca inline.
+
+telegram:
+  reactions: false
+  channel_prompts: {}
+  allowed_chats: ''       # restringir aos chats de teste no smoke (Task 5)
+
+# ---- Adapter de memoria (claude-mem) via shell hooks ----
+# CMEM_URL / CMEM_PROJECT / CMEM_API_KEY vem por env (compose). Os scripts
+# usam curl+jq (instalados na imagem slim). Auto-accept obrigatorio em
+# gateway sem TTY (tambem HERMES_ACCEPT_HOOKS=1 no env).
+hooks_auto_accept: true
+hooks:
+  pre_llm_call:
+    - command: "/hooks/cmem-recall.sh"
+      timeout: 5
+  post_tool_call:
+    - command: "/hooks/cmem-capture.sh"
+      timeout: 5
+  on_session_start:
+    - command: "/hooks/cmem-session.sh"
+      timeout: 5
+  subagent_stop:
+    - command: "/hooks/cmem-session.sh"
+      timeout: 5
+  on_session_end:
+    - command: "/hooks/cmem-session.sh"
+      timeout: 5

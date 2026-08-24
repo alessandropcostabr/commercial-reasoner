@@ -1,0 +1,170 @@
+# Agente Fase 1 - stack isolado no 192.0.2.10 (Trixie / servico-a + servico-b).
+#
+# 4 servicos: pg-agent (Postgres) + valkey (BullMQ) + cmem (claude-mem
+# server-beta) + hermes (engine Qwen/OpenRouter). Bridge network propria
+# (NAO usar network_mode:host - anula o egress isolation). Limites de cgroup
+# conservadores porque o box e apertado (~1,1Gi livre real; servico-a+servico-b
+# co-residentes; disco unico = contencao de I/O).
+#
+# Arquitetura corrigida pos-auditoria de codigo (ver docs/...plan...).
+# O runtime de memoria e o SERVER-BETA (rotas /v1/*), NAO o worker SQLite.
+# pgvector e embed-server externo NAO sao usados.
+
+name: agent
+
+networks:
+  agent-net:
+    driver: bridge
+
+volumes:
+  pg-agent-data:
+  valkey-data:
+  hermes-data:
+
+services:
+  # ---- Postgres dedicado da Agente (memoria limpa, isolada do global) ----
+  pg-agent:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PGAGENT_USER:-agent}
+      POSTGRES_PASSWORD: ${PGAGENT_PASSWORD:?defina PGAGENT_PASSWORD no .env}
+      POSTGRES_DB: ${PGAGENT_DB:-agent}
+      # shared_buffers pequeno: box apertado, disco compartilhado com servico-a.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=40
+    volumes:
+      - pg-agent-data:/var/lib/postgresql/data
+      - ./pg-agent/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    networks: [agent-net]
+    mem_limit: 448m
+    mem_swappiness: 10
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGAGENT_USER:-agent} -d ${PGAGENT_DB:-agent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---- Valkey (fila BullMQ exigida pelo server-beta em modo Docker) ----
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--save", ""]
+    volumes:
+      - valkey-data:/data
+    networks: [agent-net]
+    mem_limit: 160m
+    cpus: 0.25
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # ---- claude-mem server-beta (memoria da Agente; rotas /v1/*) ----
+  cmem:
+    build:
+      context: ${CMEM_REPO:-../staging/claude-mem-contrib}
+      dockerfile: docker/claude-mem/Dockerfile
+      args:
+        BUN_VERSION: "1.3.12"
+        UV_VERSION: "0.11.7"
+    restart: unless-stopped
+    # O entrypoint oficial forca `bun`, que da SIGILL em CPU sem SSE4.2/AVX2
+    # (192.0.2.10 = CPU antiga). O server-beta (Postgres, nao bun:sqlite) roda
+    # sob node:20 sem problema - validado: HTTP up + /v1/search 401. Override
+    # do entrypoint para usar node.
+    entrypoint:
+      - bash
+      - -c
+      - 'mkdir -p "$$HOME/.claude" "$$HOME/.claude-mem" && exec node /opt/claude-mem/scripts/server-beta-service.cjs --daemon'
+    environment:
+      CLAUDE_MEM_RUNTIME: server-beta
+      CLAUDE_MEM_CONTAINER_MODE: server
+      CLAUDE_MEM_DOCKER: "1"
+      CLAUDE_MEM_AUTH_MODE: api-key
+      CLAUDE_MEM_SERVER_HOST: 0.0.0.0
+      CLAUDE_MEM_SERVER_PORT: ${CMEM_PORT:-37877}
+      CLAUDE_MEM_SERVER_DATABASE_URL: postgres://${PGAGENT_USER:-agent}:${PGAGENT_PASSWORD:?}@pg-agent:5432/${PGAGENT_DB:-agent}
+      CLAUDE_MEM_QUEUE_ENGINE: bullmq
+      CLAUDE_MEM_REDIS_URL: redis://valkey:6379
+      CLAUDE_MEM_CHROMA_ENABLED: "false"
+      # Geracao de memorias inline no daemon (provider OpenRouter/Qwen):
+      CLAUDE_MEM_SERVER_PROVIDER: ${CLAUDE_MEM_SERVER_PROVIDER:-openrouter}
+      CLAUDE_MEM_SERVER_MODEL: ${CLAUDE_MEM_SERVER_MODEL:-qwen/qwen-2.5-72b-instruct}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?defina OPENROUTER_API_KEY no .env}
+    depends_on:
+      pg-agent:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    networks: [agent-net]
+    mem_limit: 640m
+    mem_swappiness: 10
+    cpus: 0.75
+    healthcheck:
+      # server-beta nao tem /health (404); liveness = servidor responde HTTP.
+      # curl sem -f retorna 0 em qualquer resposta (404/401); falha so se a
+      # conexao cair (porta nao escutando) -> unhealthy.
+      test: ["CMD-SHELL", "curl -sS -o /dev/null http://localhost:${CMEM_PORT:-37877}/v1/search -X POST -H 'content-type: application/json' -d '{}' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # ---- Hermes (engine/cerebro Qwen via OpenRouter) ----
+  hermes:
+    # Imagem oficial upstream 0.16 (s6-overlay), buildada do staging
+    # hermes-upstream com o Dockerfile oficial menos o download do chromium.
+    # image: usa a tag ja buildada (evita rebuild de ~25min no `up`); build:
+    # documenta como reproduzir.
+    image: agent-hermes:0.16
+    build:
+      context: ${HERMES_REPO:-../staging/hermes-upstream}
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      # Allowlist do gateway: so estes IDs de Telegram falam com a Agente.
+      # (pairing approve nao preenche a allowlist do gateway nesta versao.)
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+      # Hooks shell precisam de auto-accept em ambiente sem TTY (gateway):
+      HERMES_ACCEPT_HOOKS: "1"
+      # Endpoint + credenciais do cmem para os hooks (Bearer + projectId):
+      CMEM_URL: http://cmem:${CMEM_PORT:-37877}
+      CMEM_PROJECT: ${CMEM_PROJECT:-agent}
+      CMEM_API_KEY: ${CMEM_API_KEY:-}
+    volumes:
+      # /opt/data persistente: evita re-baixar o setup de 1o boot (node/skills)
+      # a cada restart.
+      - hermes-data:/opt/data
+      # config.yaml: montar como SEED read-only e o command copia para
+      # /opt/data/config.yaml no boot. No 0.16 o cont-init seeda um config v30
+      # READ-ONLY (444) em /opt/data/config.yaml -> `cp` simples falha
+      # (Permission denied); o command usa `install -m 644` para forcar.
+      - ./hermes/config.yaml:/seed/config.yaml:ro
+      # Hooks num path SEPARADO (/hooks, ro): /opt/data/hooks e gerenciado/
+      # escrito pelo proprio hermes (uid 10000) e conflita com bind-mount do
+      # host (uid 1000) -> PermissionError. Os scripts sao referenciados por
+      # path absoluto no config.yaml, nao precisam viver em /opt/data/hooks.
+      - ./hermes/agent-hooks:/hooks:ro
+    depends_on:
+      cmem:
+        condition: service_healthy
+    networks: [agent-net]
+    mem_limit: 768m
+    mem_swappiness: 10
+    cpus: 0.75
+    # Seed do config.yaml (de /seed, ro) para /opt/data (gravavel) e entao sobe
+    # o gateway Telegram em foreground. --accept-hooks registra os hooks sem TTY.
+    command:
+      - bash
+      - -c
+      - 'install -m 644 /seed/config.yaml /opt/data/config.yaml && exec /opt/hermes/.venv/bin/hermes gateway run --accept-hooks'

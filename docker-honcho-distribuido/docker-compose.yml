@@ -1,0 +1,80 @@
+services:
+  honcho-api:
+    build: ./honcho-src
+    image: honcho-stack-honcho-api:latest
+    container_name: honcho-api
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    depends_on:
+      honcho-pg: { condition: service_healthy }
+      honcho-redis: { condition: service_healthy }
+    ports:
+      - "0.0.0.0:38000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "/app/.venv/bin/python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://honcho:${HONCHO_PG_PASSWORD:?}@honcho-pg:5432/honcho
+      - CACHE_URL=redis://honcho-redis:6379/0
+      - CACHE_ENABLED=true
+    env_file:
+      - path: .env
+        required: true
+    mem_limit: 1g
+    restart: unless-stopped
+    networks: [honcho-internal]
+  honcho-deriver:
+    image: honcho-stack-honcho-api:latest
+    container_name: honcho-deriver
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    depends_on:
+      honcho-api: { condition: service_healthy }
+      honcho-pg: { condition: service_healthy }
+      honcho-redis: { condition: service_healthy }
+    environment:
+      - DB_CONNECTION_URI=postgresql+psycopg://honcho:${HONCHO_PG_PASSWORD:?}@honcho-pg:5432/honcho
+      - CACHE_URL=redis://honcho-redis:6379/0
+      - CACHE_ENABLED=true
+    env_file:
+      - path: .env
+        required: true
+    mem_limit: 768m
+    restart: unless-stopped
+    networks: [honcho-internal]
+  honcho-pg:
+    image: pgvector/pgvector:pg15
+    container_name: honcho-pg
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=50"]
+    environment:
+      - POSTGRES_DB=honcho
+      - POSTGRES_USER=honcho
+      - POSTGRES_PASSWORD=${HONCHO_PG_PASSWORD:?}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - honcho-pgdata:/var/lib/postgresql/data/
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honcho -d honcho"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    networks: [honcho-internal]
+  honcho-redis:
+    image: redis:8.2
+    container_name: honcho-redis
+    restart: unless-stopped
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks: [honcho-internal]
+volumes:
+  honcho-pgdata:
+networks:
+  honcho-internal:
+    driver: bridge

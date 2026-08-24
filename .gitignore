@@ -1,0 +1,15 @@
+node_modules/
+CLAUDE.md
+.env
+.env.*
+*.key
+*.secret
+secrets/
+*.log
+__pycache__/
+.venv/
+
+# Docs de design/planejamento e runbook interno — não publicar (decisão 2026-08-23)
+docs/
+docker/README.md
+.claude/
