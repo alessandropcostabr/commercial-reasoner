@@ -19,12 +19,17 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from ..memory.numeric_guard import find_modality_hint
 from .contract import CommitmentCategory
 
-# "12x", "3 x" -> parcelamento explicito, alem do que find_modality_hint pega
-# (cartao/boleto/a vista/pix/parcelado).
+# "12x", "3 x" -> parcelamento explicito.
 _INSTALLMENT_RE = re.compile(r"\b\d+\s*x\b", re.IGNORECASE)
+
+# Aliases de forma de pagamento, palavra inteira. Nao reusa find_modality_hint:
+# aquele casa por substring (Item 1), entao "pix" dentro de "pixels" viraria
+# FORMA_PAGAMENTO (achado Codex). Aqui e word-bounded p/ classificar compromisso.
+_MODALITY_RE = re.compile(
+    r"\b(?:pix|cart[aã]o|boleto|[aà]\s+vista|parcelad[oa]s?)\b", re.IGNORECASE
+)
 
 # Palavra inteira: "off" como substring casava "offline"/"coffee" -> falso
 # desconto (achado Codex). Plurais cobertos por `s?`.
@@ -47,15 +52,16 @@ def classify_commitment(response_text: str) -> Optional[CommitmentCategory]:
     """
     lowered = response_text.lower()
 
-    # % pre-envio, no dominio de vendas, e concessao de desconto (alinha D2 do
-    # gate financeiro: "% (desconto)").
-    if "%" in response_text or _DISCOUNT_RE.search(response_text):
+    # Exige CONTEXTO de desconto (palavra desconto/off/abatimento). Um `%` cru
+    # nao basta: "100% presencial"/"frequencia 75%" nao sao desconto (achado
+    # Codex). "10% de desconto"/"50% off" ainda batem via a palavra.
+    if _DISCOUNT_RE.search(response_text):
         return CommitmentCategory.DESCONTO
 
     if "r$" in lowered:
         return CommitmentCategory.PRECO
 
-    if find_modality_hint(response_text) is not None or _INSTALLMENT_RE.search(response_text):
+    if _MODALITY_RE.search(response_text) or _INSTALLMENT_RE.search(response_text):
         return CommitmentCategory.FORMA_PAGAMENTO
 
     if any(w in lowered for w in _FRETE_WORDS):

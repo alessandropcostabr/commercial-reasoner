@@ -46,9 +46,21 @@ def test_parcelamento_explicito_sem_palavra_de_modalidade():
     assert classify_commitment("Da pra fechar em 12x.") == CommitmentCategory.FORMA_PAGAMENTO
 
 
-def test_percentual_isolado_conta_como_desconto():
-    # No dominio de vendas, % pre-envio = desconto (alinha com o gate financeiro).
-    assert classify_commitment("Aplico 15% pra voce.") == CommitmentCategory.DESCONTO
+def test_percentual_sem_contexto_de_desconto_nao_e_desconto():
+    # % cru sem palavra de desconto nao classifica DESCONTO (achado Codex):
+    # produto/frequencia com % nao e concessao comercial.
+    assert classify_commitment("O curso e 100% presencial.") is None
+    assert classify_commitment("A frequencia minima e 75%.") is None
+    assert classify_commitment("Aplico 15% pra voce.") is None
+
+
+def test_percentual_com_palavra_desconto_e_desconto():
+    assert classify_commitment("Dou 15% de desconto.") == CommitmentCategory.DESCONTO
+
+
+def test_pix_como_substring_nao_e_forma_pagamento():
+    # "pix" dentro de "pixels" nao pode virar FORMA_PAGAMENTO (achado Codex).
+    assert classify_commitment("Enviamos imagens em pixels de alta resolucao.") is None
 
 
 def test_off_como_substring_nao_e_desconto():
