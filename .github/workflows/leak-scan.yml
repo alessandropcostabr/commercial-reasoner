@@ -1,0 +1,29 @@
+name: Leak Scan
+
+# Guard contra vazamento em repo PUBLICO. Pega segredos (regras padrao do
+# gitleaks) E vazamento de arquitetura interna (IPs privados, nomes de maquina,
+# caminhos do repo privado LATE) via .gitleaks.toml - a classe que o Secret
+# Scanning do GitHub nao cobre. Falha o check => bloqueia o merge (torne
+# required em Settings > Branches).
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # Repo OSS/publico: gitleaks-action nao exige GITLEAKS_LICENSE.

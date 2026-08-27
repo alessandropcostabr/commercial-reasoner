@@ -1,0 +1,41 @@
+# Leak scan - regras custom + defaults do gitleaks.
+# Pega DUAS classes: segredos (defaults) E vazamento de arquitetura interna
+# (IPs privados, nomes de maquina, caminhos do repo privado LATE) - a classe que
+# o Secret Scanning do GitHub NAO ve.
+
+title = "commercial-reasoner leak scan"
+
+[extend]
+useDefault = true  # inclui todas as regras de segredo padrao do gitleaks
+
+[[rules]]
+id = "internal-private-ip"
+description = "IP de rede interna (LAN privada) - nao expor topologia"
+regex = '''\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b'''
+tags = ["internal", "infra"]
+
+[[rules]]
+id = "internal-hostname"
+description = "Nome de maquina interna da infra"
+regex = '''(?i)\b(mach10|darkstarii|darkstar|hyperii|hyper)\b'''
+tags = ["internal", "infra"]
+
+[[rules]]
+id = "late-private-artifact"
+description = "Caminho/artefato interno do repo privado LATE"
+regex = '''(docs/planning/|services/chatbot/|middleware/webhookIdempotency|flowEngineService|assistHookService|chatbot_flow_runs|outbound_dispatch_jobs|late-eng)'''
+tags = ["internal", "leak"]
+
+[allowlist]
+description = "Falsos-positivos conhecidos (dados FICTICIOS de exemplo, nomes de env)"
+# Nomes de variaveis de ambiente (nao sao valores) e o placeholder do exemplo.
+regexes = [
+  '''OPENROUTER_API_KEY''',
+  '''LATE_WEBHOOK_SECRET''',
+  '''LATE_WEBHOOK_URL''',
+]
+# Docs de exemplo com dado ficticio nao sao segredo.
+paths = [
+  '''hermes-alma/SOUL\.md''',
+  '''docs/PLAYBOOK\.md''',
+]
