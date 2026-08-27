@@ -54,7 +54,7 @@ def build_system_prompt(req: ReasonRequest) -> str:
     """
     soul = _persona_sem_exemplos(_read(os.environ.get("LLM_SOUL_PATH", "hermes-alma/SOUL.md")))
     playbook = _read(os.environ.get("LLM_PLAYBOOK_PATH", "docs/PLAYBOOK.md"))
-    facts = json.dumps(req.grounded_facts, ensure_ascii=False)
+    facts = json.dumps(req.grounded_facts.model_dump(), ensure_ascii=False)
     rapport = json.dumps(req.rapport, ensure_ascii=False)
     return (
         f"{soul}\n\n{playbook}\n\n"
@@ -84,6 +84,8 @@ def llm_generate(req: ReasonRequest) -> GeneratedTurn:
     if not key:  # fail-closed
         raise RuntimeError("LLM_API_KEY ausente")
     base = os.environ.get("LLM_BASE_URL", _DEFAULT_BASE)
+    if not base.lower().startswith("https://"):  # nunca mandar o bearer em cleartext (L91)
+        raise RuntimeError("LLM_BASE_URL deve ser HTTPS")
     model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
 
     resp = httpx.post(

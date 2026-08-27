@@ -67,8 +67,8 @@ def test_messages_monta_system_history_user(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(
-    os.environ.get("LLM_INTEGRATION") != "1",
-    reason="integracao real: setar LLM_INTEGRATION=1 + LLM_API_KEY (nao roda no CI)",
+    os.environ.get("LLM_INTEGRATION") != "1" or bool(os.environ.get("CI")),
+    reason="integracao real: LLM_INTEGRATION=1 E fora de CI - nunca chamada externa no CI",
 )
 def test_llm_generate_integracao_real():
     from commercial_reasoner.service.llm import llm_generate

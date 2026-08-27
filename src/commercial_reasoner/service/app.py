@@ -1,25 +1,25 @@
-"""Servico HTTP stateless da engine para o LATE (contrato Fase 0 + gate Fase 1).
+"""Servico HTTP stateless da engine para o LATE (contrato + gate + reasoning).
 
-O reasoning ainda e canned (stub em reasoning._stub_generate); o gate financeiro
-deterministico JA roda sobre os grounded_facts do request (barra dinheiro errado
-antes de qualquer LLM). Todo o resto do contrato e real (schema, event_id,
-timestamp assinado, echo do token, HMAC sobre bytes crus, fail-closed).
+/reason retorna 202 IMEDIATO (contrato assincrono); reasoning (LLM) + assinatura
++ entrega do webhook rodam em background. O reasoning e sync (chamada HTTP ao
+LLM); roda em threadpool p/ NAO bloquear o event loop (L99). LLM real so com flag
+COMMERCIAL_REASONER_LLM=llm + chave; default = stub deterministico.
 
 Rodar: `uv run --extra service uvicorn commercial_reasoner.service.app:app`
-Env: LATE_WEBHOOK_SECRET (obrigatorio, fail-closed), LATE_WEBHOOK_URL (opcional
-enquanto o receiver do LATE nao existe).
+Env: LATE_WEBHOOK_SECRET (obrig., fail-closed), LATE_WEBHOOK_URL (opcional).
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 
 from . import reasoning
-from .contract import ReasonRequest, serialize, sign
+from .contract import ReasonRequest, make_event_id, serialize, sign
 
-app = FastAPI(title="Commercial Reasoner - contrato LATE (stub) + gate")
+app = FastAPI(title="Commercial Reasoner - contrato LATE + gate + reasoning")
 
 
 def _generator():
@@ -52,25 +52,26 @@ async def _deliver(raw: bytes, sig: str) -> None:
         await client.post(
             url,
             content=raw,
-            headers={
-                "content-type": "application/json",
-                "x-webhook-signature": sig,
-            },
+            headers={"content-type": "application/json", "x-webhook-signature": sig},
         )
+
+
+async def _process(req: ReasonRequest, secret: str) -> None:
+    # reasoning.reason e sync (chamada HTTP ao LLM) -> threadpool, sem travar o loop.
+    envelope = await asyncio.to_thread(reasoning.reason, req, _generator())
+    raw = serialize(envelope)
+    sig = sign(raw, secret)
+    await _deliver(raw, sig)
 
 
 @app.post("/reason", status_code=status.HTTP_202_ACCEPTED)
 async def reason(req: ReasonRequest, background: BackgroundTasks):
-    secret = _secret()
-    envelope = reasoning.reason(req, generate=_generator())  # gera + grounding + gate
-    raw = serialize(envelope)
-    sig = sign(raw, secret)
-    background.add_task(_deliver, raw, sig)  # webhook assincrono (at-least-once)
+    secret = _secret()  # fail-closed cedo, antes de aceitar
+    background.add_task(_process, req, secret)
     return {
         "accepted": True,
         "correlation_token": req.correlation_token,
-        "event_id": envelope.event_id,
-        "outcome": envelope.outcome.value,
+        "event_id": make_event_id(req.correlation_token),
     }
 
 

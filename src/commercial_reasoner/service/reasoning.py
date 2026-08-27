@@ -48,7 +48,7 @@ def reason(req: ReasonRequest, generate: GenerateFn = _stub_generate) -> Respons
     commitment: Optional[CommitmentCategory] = gen.get("commitment_category")
 
     # Gate financeiro deterministico sobre os fatos da conta (payload) - sem LLM.
-    canonical = canonical_from_mapping(req.grounded_facts)
+    canonical = canonical_from_mapping(req.grounded_facts.model_dump())
     verdict = check_response(response_text, canonical)
     if verdict.decision == "block":
         # Valor financeiro nao confere -> escala; o LATE nao auto-envia.
