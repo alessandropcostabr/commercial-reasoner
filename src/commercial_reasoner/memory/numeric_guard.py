@@ -18,14 +18,11 @@ _ANY_NUMBER_RE = re.compile(_PT_BR_NUMBER)
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-# Modalidades cujo `PricePoint.value` e o VALOR DA PARCELA (nao o total).
-_INSTALLMENT_MODALITIES = ("card_installment", "installment_plan_total")
+_CENTS = 2  # dinheiro pt-BR: 2 casas. round evita erro binario de float (achado CodeRabbit).
 
-# Plano de parcelamento afirmado: conta + valor da parcela adjacentes.
-# "12x de R$ 100", "12x R$100", "12 x de R$ 100".
-_PLAN_RE = re.compile(rf"(\d+)\s*x\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
-# Entrada afirmada: "entrada de R$ 200".
-_ENTRADA_RE = re.compile(rf"entrada\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
+
+def _money_eq(a: float, b: float) -> bool:
+    return round(a, _CENTS) == round(b, _CENTS)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -92,65 +89,129 @@ def classify_client_number(value: float, canonical_facts: CanonicalFacts) -> Opt
     return None
 
 
+# --- Verificacao aritmetica de parcelamento (design gate §4) -----------------
+# SEM novos campos no schema: o canonical ja modela o plano em modalidades irmas
+# (convencao da fixture) - `<familia>_installment` (valor da parcela),
+# `<familia>_total` (total), `installment_plan_downpayment` (entrada). A contagem
+# de parcelas sai DERIVADA: (total - entrada) / valor da parcela.
+
+# Modalidades cujo PricePoint.value e o VALOR DA PARCELA.
+_INSTALLMENT_VALUE_MODALITIES = ("card_installment", "installment_plan_installment")
+
+# familia -> (modalidade do total, modalidade da entrada | None).
+_PLAN_FAMILY: dict[str, tuple[str, Optional[str]]] = {
+    "card": ("card_total", None),
+    "installment_plan": ("installment_plan_total", "installment_plan_downpayment"),
+}
+
+_FAMILY_ALIASES: dict[str, tuple[str, ...]] = {
+    "card": ("cartao", "cartão"),
+    "installment_plan": ("boleto", "parcelad"),
+}
+
+# "12x de R$ 100", "12 parcelas de R$ 100", "12 vezes de R$ 100" (achado Codex:
+# a contagem tambem aparece sem o "x").
+_PLAN_RE = re.compile(
+    rf"(\d+)\s*(?:x|vezes?|parcelas?)\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE
+)
+_ENTRADA_RE = re.compile(rf"entrada\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
+
+
+def _family_of(modality: str) -> Optional[str]:
+    if modality.startswith("card"):
+        return "card"
+    if modality.startswith("installment_plan"):
+        return "installment_plan"
+    return None
+
+
+def _family_hint(sentence: str) -> Optional[str]:
+    lowered = sentence.lower()
+    for family, aliases in _FAMILY_ALIASES.items():
+        if any(a in lowered for a in aliases):
+            return family
+    return None
+
+
 @dataclass(frozen=True)
 class InstallmentExpr:
     count: int
     value: float  # valor da parcela afirmado
+    span: tuple[int, int]  # trecho "12x de R$ 100" na frase (consumo por posicao)
     down: Optional[float]  # entrada afirmada (None = nao mencionada)
-    raw: str  # trecho casado, ex.: "12x de R$ 100"
+    down_span: Optional[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class PlanVerdict:
+    confers: bool
+    family_total: Optional[float]  # total da familia (p/ consumir um total afirmado)
 
 
 def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
     """Planos de parcelamento afirmados na frase (conta x valor da parcela)."""
-    down_match = _ENTRADA_RE.search(sentence)
-    down = parse_number(down_match.group(1)) if down_match else None
+    down_m = _ENTRADA_RE.search(sentence)
+    down = parse_number(down_m.group(1)) if down_m else None
+    down_span = down_m.span() if down_m else None
     return [
         InstallmentExpr(
             count=int(m.group(1)),
             value=parse_number(m.group(2)),
+            span=m.span(),
             down=down,
-            raw=m.group(0),
+            down_span=down_span,
         )
         for m in _PLAN_RE.finditer(sentence)
     ]
 
 
-def match_installment_plan(
-    expr: InstallmentExpr, modality_hint: Optional[str], canonical_facts: CanonicalFacts
-) -> Optional[PricePoint]:
-    """Plano canonico que confere com o afirmado, ou None.
+def check_installment_plan(
+    expr: InstallmentExpr, sentence: str, canonical_facts: CanonicalFacts
+) -> PlanVerdict:
+    """Confere o plano afirmado contra as modalidades irmas do canonical.
 
-    Confere quando: e modalidade de parcela (e a mesma, se o texto deu dica),
-    valor da parcela == expr.value, contagem compativel (plano legado sem
-    `installments` => contagem nao exigida, preserva Item 1; com => tem que
-    bater) e entrada compativel (se o texto afirmou entrada, casa a do plano).
+    Acha a modalidade de parcela cujo value == expr.value (respeitando a familia
+    se o texto disser cartao/boleto). Se a familia tem TOTAL, deriva a contagem
+    ((total - entrada) / parcela) e exige expr.count == derivada + aritmetica
+    consistente. Sem total (canonical legado do Item 1), a contagem NAO e exigida.
+    Entrada afirmada tem que casar a da familia.
     """
-    for pp in canonical_facts.prices:
-        if pp.modality not in _INSTALLMENT_MODALITIES:
-            continue
-        if modality_hint is not None and pp.modality != modality_hint:
-            continue
-        if pp.value != expr.value:
-            continue
-        if pp.installments is not None and pp.installments != expr.count:
-            continue
-        if expr.down is not None and pp.down_payment != expr.down:
-            continue
-        return pp
-    return None
+    fam_hint = _family_hint(sentence)
+    by_mod = {p.modality: p.value for p in canonical_facts.prices}
 
+    family: Optional[str] = None
+    per_value: Optional[float] = None
+    for p in canonical_facts.prices:
+        if p.modality not in _INSTALLMENT_VALUE_MODALITIES:
+            continue
+        if not _money_eq(p.value, expr.value):
+            continue
+        fam = _family_of(p.modality)
+        if fam_hint is not None and fam != fam_hint:
+            continue
+        family, per_value = fam, p.value
+        break
+    if family is None or per_value is None:
+        return PlanVerdict(False, None)
 
-def plan_verified_values(pp: PricePoint, expr: InstallmentExpr) -> set[float]:
-    """Valores que o plano conferido JA explica na frase (o loop generico nao
-    deve re-checar): valor da parcela, entrada, e o total DERIVADO
-    aritmeticamente (installments * valor + entrada) - esta e a verificacao
-    aritmetica do design §4, sem exigir o total repetido no canonical."""
-    verified = {pp.value, pp.down_payment}
-    if expr.down is not None:
-        verified.add(expr.down)
-    if pp.installments is not None:
-        verified.add(pp.installments * pp.value + pp.down_payment)
-    return verified
+    total_mod, down_mod = _PLAN_FAMILY[family]
+    total = by_mod.get(total_mod)
+    down = by_mod.get(down_mod) if down_mod is not None else 0.0
+    if down is None:
+        down = 0.0
+
+    if expr.down is not None and not _money_eq(expr.down, down):
+        return PlanVerdict(False, None)
+
+    if total is not None:
+        billed = total - down
+        if per_value <= 0:
+            return PlanVerdict(False, None)
+        derived = round(billed / per_value)
+        if derived != expr.count or not _money_eq(derived * per_value, billed):
+            return PlanVerdict(False, None)
+
+    return PlanVerdict(True, total)
 
 
 def check_quote(
