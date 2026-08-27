@@ -63,11 +63,24 @@ class Turn(BaseModel):
     text: str
 
 
+class PricePointIn(BaseModel):
+    modality: str
+    value: float
+    description: str = ""
+
+
+class GroundedFacts(BaseModel):
+    # Fatos da conta+setor injetados pelo LATE. Tipado na fronteira: payload
+    # malformado (ex.: price sem `value`) vira 422 do FastAPI, nao 500 (L52).
+    prices: list[PricePointIn] = []
+    other_numbers: list[float] = []
+
+
 class ReasonRequest(BaseModel):
     correlation_token: str
     message: str
     history: list[Turn] = []
-    grounded_facts: dict = {}
+    grounded_facts: GroundedFacts = GroundedFacts()
     rapport: RapportT = None
     stage: str
 
