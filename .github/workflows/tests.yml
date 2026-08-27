@@ -13,4 +13,4 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Run tests
-        run: uv run --frozen pytest -q
+        run: uv run --frozen --extra service pytest -q
