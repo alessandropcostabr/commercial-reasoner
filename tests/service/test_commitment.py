@@ -63,6 +63,21 @@ def test_pix_como_substring_nao_e_forma_pagamento():
     assert classify_commitment("Enviamos imagens em pixels de alta resolucao.") is None
 
 
+def test_parcelas_substantivo_e_forma_pagamento():
+    # "3 parcelas" (substantivo, sem "x") tambem e forma de pagamento (achado Codex).
+    assert classify_commitment("Pode pagar em 3 parcelas.") == CommitmentCategory.FORMA_PAGAMENTO
+
+
+def test_dia_singular_com_numero_e_prazo():
+    # "1 dia" (singular) conta como prazo (achado Codex).
+    assert classify_commitment("A entrega leva 1 dia util.") == CommitmentCategory.PRAZO
+
+
+def test_bom_dia_nao_e_prazo():
+    # "dia" cru (sem numero) nao vira PRAZO - "bom dia" e saudacao, nao compromisso.
+    assert classify_commitment("Bom dia! Como posso ajudar?") is None
+
+
 def test_off_como_substring_nao_e_desconto():
     # "off" dentro de outra palavra nao pode virar desconto (achado Codex).
     assert classify_commitment("Nosso atendimento offline nao para.") is None

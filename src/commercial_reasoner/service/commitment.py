@@ -27,14 +27,21 @@ _INSTALLMENT_RE = re.compile(r"\b\d+\s*x\b", re.IGNORECASE)
 # Aliases de forma de pagamento, palavra inteira. Nao reusa find_modality_hint:
 # aquele casa por substring (Item 1), entao "pix" dentro de "pixels" viraria
 # FORMA_PAGAMENTO (achado Codex). Aqui e word-bounded p/ classificar compromisso.
+# `parcel\w*` cobre o substantivo ("3 parcelas") alem do adjetivo ("parcelado")
+# (achado Codex).
 _MODALITY_RE = re.compile(
-    r"\b(?:pix|cart[aã]o|boleto|[aà]\s+vista|parcelad[oa]s?)\b", re.IGNORECASE
+    r"\b(?:pix|cart[aã]o|boleto|[aà]\s+vista|parcel\w*)\b", re.IGNORECASE
 )
 
 # Palavra inteira: "off" como substring casava "offline"/"coffee" -> falso
 # desconto (achado Codex). Plurais cobertos por `s?`.
 _DISCOUNT_RE = re.compile(r"\b(?:descontos?|off|abatimentos?)\b", re.IGNORECASE)
-_PRAZO_WORDS = ("prazo", "dias", "semana", "validade", "vencimento")
+
+# Prazo: dias so contam com numero na frente ("1 dia", "2 dias") - "dia" cru
+# pegaria "bom dia" (achado Codex: singular + token-aware). Demais sao keywords.
+_PRAZO_RE = re.compile(
+    r"\b(?:prazo|semanas?|validade|vencimento)\b|\b\d+\s*dias?\b", re.IGNORECASE
+)
 _FRETE_WORDS = ("frete",)
 
 
@@ -67,7 +74,7 @@ def classify_commitment(response_text: str) -> Optional[CommitmentCategory]:
     if any(w in lowered for w in _FRETE_WORDS):
         return CommitmentCategory.FRETE
 
-    if any(w in lowered for w in _PRAZO_WORDS):
+    if _PRAZO_RE.search(response_text):
         return CommitmentCategory.PRAZO
 
     return None
