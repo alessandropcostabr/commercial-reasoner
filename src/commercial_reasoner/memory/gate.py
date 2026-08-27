@@ -26,6 +26,8 @@ from .numeric_guard import (
     _NUMBER_RE,
     _money_eq,
     check_installment_plan,
+    families_mentioned,
+    find_entrada_exprs,
     find_installment_exprs,
     find_modality_hint,
     find_structured_match,
@@ -74,36 +76,61 @@ def check_response(
 
         # --- Parcelamento: plano afirmado (conta x parcela + entrada) vs canonical.
         consumed_spans: set[tuple[int, int]] = set()
-        confirmed_totals: list[float] = []  # totais canonicos de planos conferidos
-        for expr in find_installment_exprs(sentence):
-            if canonical_facts is None:
-                findings.append(GateFinding(sentence, expr.value, "installment", "unknown_number"))
+        exprs = find_installment_exprs(sentence)
+        entradas = find_entrada_exprs(sentence)
+        totals = find_total_exprs(sentence)
+
+        # Falha fechada (§6) na AMBIGUIDADE: a ligacao familia/entrada/total e
+        # por-FRASE, entao 2+ familias, 2+ planos, 2+ entradas ou 2+ totais numa
+        # frase nao dao pra vincular com seguranca -> bloqueia (escala), nunca
+        # arrisca falso-allow (ex.: boleto 12x100 conferido como cartao; total de
+        # outra familia liberado por coincidir valor) (achados Codex).
+        ambiguous = (
+            len(families_mentioned(sentence)) >= 2
+            or len(exprs) >= 2
+            or len(entradas) >= 2
+            or len(totals) >= 2
+        )
+        if exprs and ambiguous:
+            for expr in exprs:
+                findings.append(GateFinding(sentence, expr.value, "installment", "no_structured_match"))
+                consumed_spans.add(expr.span)
+            for _, espan in entradas:
+                consumed_spans.add(espan)
+            for _, tspan in totals:
+                consumed_spans.add(tspan)
+        else:
+            # Caminho de plano UNICO (<=1 plano, <=1 familia/entrada/total).
+            confirmed_totals: list[float] = []
+            for expr in exprs:
+                if canonical_facts is None:
+                    findings.append(GateFinding(sentence, expr.value, "installment", "unknown_number"))
+                    consumed_spans.add(expr.span)
+                    if expr.down_span is not None:
+                        consumed_spans.add(expr.down_span)
+                    continue
+                verdict = check_installment_plan(expr, sentence, canonical_facts)
                 consumed_spans.add(expr.span)
                 if expr.down_span is not None:
                     consumed_spans.add(expr.down_span)
-                continue
-            verdict = check_installment_plan(expr, sentence, canonical_facts)
-            consumed_spans.add(expr.span)
-            if expr.down_span is not None:
-                consumed_spans.add(expr.down_span)
-            if verdict.confers:
-                if verdict.family_total is not None:
-                    confirmed_totals.append(verdict.family_total)
-            else:
-                reason: GateReason = (
-                    "no_structured_match"
-                    if is_within_canonical(expr.value, canonical_facts)
-                    else "unknown_number"
-                )
-                findings.append(GateFinding(sentence, expr.value, "installment", reason))
+                if verdict.confers:
+                    if verdict.family_total is not None:
+                        confirmed_totals.append(verdict.family_total)
+                else:
+                    reason: GateReason = (
+                        "no_structured_match"
+                        if is_within_canonical(expr.value, canonical_facts)
+                        else "unknown_number"
+                    )
+                    findings.append(GateFinding(sentence, expr.value, "installment", reason))
 
-        # Total AFIRMADO ("total R$ T") de um plano conferido: consumido por
-        # CONTEXTO+valor (span do "total"), nao por valor solto - senao um valor
-        # de outra modalidade coincidente escaparia (achado Codex).
-        if confirmed_totals:
-            for tval, tspan in find_total_exprs(sentence):
-                if any(_money_eq(tval, ct) for ct in confirmed_totals):
-                    consumed_spans.add(tspan)
+            # Total AFIRMADO ("total R$ T") do plano unico conferido: consumido por
+            # CONTEXTO+valor (span do "total"). Sem ambiguidade, o unico total so
+            # pode ser da unica familia presente.
+            if confirmed_totals:
+                for tval, tspan in totals:
+                    if any(_money_eq(tval, ct) for ct in confirmed_totals):
+                        consumed_spans.add(tspan)
 
         # --- Loop generico: R$/% restantes (pula os spans ja explicados pelo plano).
         for match in _NUMBER_RE.finditer(sentence):

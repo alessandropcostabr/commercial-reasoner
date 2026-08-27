@@ -104,9 +104,12 @@ _PLAN_FAMILY: dict[str, tuple[str, Optional[str]]] = {
     "installment_plan": ("installment_plan_total", "installment_plan_downpayment"),
 }
 
+# Discriminador de FAMILIA: so cartao/boleto. "parcelad" e generico ("cartao
+# parcelado" tb existe), entao nao discrimina familia - se fosse alias, "cartao
+# parcelado" acusaria 2 familias e cairia em falha-fechada indevida.
 _FAMILY_ALIASES: dict[str, tuple[str, ...]] = {
     "card": ("cartao", "cartão"),
-    "installment_plan": ("boleto", "parcelad"),
+    "installment_plan": ("boleto",),
 }
 
 # "12x de R$ 100", "12 parcelas de R$ 100", "12 vezes de R$ 100", e variantes com
@@ -172,9 +175,11 @@ def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
     numa frase com dois planos e duas entradas, a 1ª entrada nao pode vazar pro
     2º plano. Uma entrada -> um plano; plano sem entrada proxima fica com down=None.
     """
-    # ponytail: o family-hint (cartao/boleto) ainda e por-FRASE (check_installment_plan),
-    # entao frase com dois planos de FAMILIAS diferentes so e parcialmente coberta -
-    # direcao segura (tende a false-block). Localizar o hint por plano e o upgrade.
+    # O family-hint (cartao/boleto) e por-FRASE, entao uma frase multi-familia/
+    # multi-plano NAO da pra vincular com seguranca aqui - e falso-ALLOW, nao
+    # falso-block (ex.: boleto 12x100 conferido como cartao). Por isso o GATE
+    # (check_response) FALHA FECHADA quando ha ambiguidade (families_mentioned>1
+    # ou 2+ planos/entradas/totais); esta funcao so parseia.
     plans = list(_PLAN_RE.finditer(sentence))
     if not plans:
         return []
@@ -207,6 +212,18 @@ def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
 def find_total_exprs(sentence: str) -> list[tuple[float, tuple[int, int]]]:
     """Totais AFIRMADOS ("total de R$ T") na frase, com valor e span."""
     return [(parse_number(m.group(1)), m.span()) for m in _TOTAL_RE.finditer(sentence)]
+
+
+def find_entrada_exprs(sentence: str) -> list[tuple[float, tuple[int, int]]]:
+    """Entradas AFIRMADAS ("entrada de R$ E") na frase, com valor e span."""
+    return [(parse_number(m.group(1)), m.span()) for m in _ENTRADA_RE.finditer(sentence)]
+
+
+def families_mentioned(sentence: str) -> set[str]:
+    """Familias de plano citadas na frase (cartao/boleto). >1 => a ligacao
+    familia<->expressao e ambigua e o gate falha fechado (nao arrisca bind errado)."""
+    lowered = sentence.lower()
+    return {fam for fam, aliases in _FAMILY_ALIASES.items() if any(a in lowered for a in aliases)}
 
 
 def check_installment_plan(

@@ -34,6 +34,19 @@ CANON_LEGACY = CanonicalFacts(
     other_numbers=(),
 )
 
+# Duas familias no mesmo canonical: card 12x100 (total 1200) + boleto 5x250
+# (entrada 250, total 1500).
+CANON_MIXED = CanonicalFacts(
+    prices=(
+        PricePoint("card_installment", 100.0, "cartao parcela"),
+        PricePoint("card_total", 1200.0, "cartao total"),
+        PricePoint("installment_plan_installment", 250.0, "boleto parcela"),
+        PricePoint("installment_plan_downpayment", 250.0, "boleto entrada"),
+        PricePoint("installment_plan_total", 1500.0, "boleto total"),
+    ),
+    other_numbers=(),
+)
+
 
 def test_plano_conta_e_valor_certos_allow():
     v = check_response("No cartao fica 12x de R$ 100.", CANON_CARD)
@@ -143,6 +156,36 @@ def test_segundo_plano_sem_entrada_nao_herda_a_do_primeiro():
     exprs = find_installment_exprs("12x de R$ 100 ou 4x de R$ 250 com entrada de R$ 200")
     assert exprs[0].value == 100.0 and exprs[0].down is None
     assert exprs[1].value == 250.0 and exprs[1].down == 200.0
+
+
+def test_multi_familia_plano_invalido_falha_fechada():
+    # boleto 12x de R$100 e INVALIDO (boleto e 5x250), mas antes passava conferido
+    # como cartao (false-allow, achado Codex). Duas familias -> falha fechada.
+    v = check_response("No cartao, 12x de R$ 100; no boleto, 12x de R$ 100.", CANON_MIXED)
+    assert v.decision == "block"
+
+
+def test_multi_familia_total_de_outra_familia_falha_fechada():
+    # total 1.200 e do cartao, mas afirmado no boleto (boleto e 1.500) -> nao pode
+    # ser liberado so por coincidir valor (achado Codex). Duas familias -> block.
+    v = check_response("No cartao, 12x de R$ 100; no boleto, total de R$ 1.200.", CANON_MIXED)
+    assert v.decision == "block"
+
+
+def test_duas_entradas_no_mesmo_plano_falha_fechada():
+    # entrada errada (1.200) + entrada certa (250): antes so a ultima validava e a
+    # errada escapava (achado Codex). Duas entradas -> falha fechada.
+    v = check_response(
+        "No boleto, 5x de R$ 250 com entrada de R$ 1.200 e entrada de R$ 250.", CANON_MIXED
+    )
+    assert v.decision == "block"
+
+
+def test_cartao_parcelado_familia_unica_ainda_allow():
+    # "cartao parcelado" NAO pode acusar 2 familias (parcelad nao discrimina) -
+    # plano de cartao valido segue liberado.
+    v = check_response("No cartao parcelado, 12x de R$ 100.", CANON_CARD)
+    assert v.decision == "allow"
 
 
 def test_conta_com_conectores_verifica():
