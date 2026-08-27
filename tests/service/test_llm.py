@@ -76,3 +76,72 @@ def test_llm_generate_integracao_real():
     turn = llm_generate(_req())
     assert isinstance(turn.get("response_text"), str)
     assert turn["response_text"].strip()
+
+
+# --- structured output: parsing puro (sem rede) --------------------------------
+from commercial_reasoner.service.contract import CommitmentCategory, Outcome, Technique
+from commercial_reasoner.service.llm import parse_structured
+
+
+def test_parse_json_completo_seta_as_quatro_etiquetas():
+    raw = (
+        '{"response_text": "Fica R$ 1.000 a vista. Fechamos hoje?", '
+        '"technique": "CIALDINI", "stage": "closing", '
+        '"commitment_category": "preco", "outcome": "continue"}'
+    )
+    out = parse_structured(raw)
+    assert out["response_text"] == "Fica R$ 1.000 a vista. Fechamos hoje?"
+    assert out["technique"] is Technique.CIALDINI
+    assert out["stage"] == "closing"
+    assert out["commitment_category"] is CommitmentCategory.PRECO
+    assert out["outcome"] is Outcome.CONTINUE
+
+
+def test_parse_enum_case_insensitive():
+    out = parse_structured('{"response_text": "oi", "technique": "voss", "outcome": "CLOSE"}')
+    assert out["technique"] is Technique.VOSS
+    assert out["outcome"] is Outcome.CLOSE
+
+
+def test_parse_enum_invalido_e_omitido_cai_no_fallback():
+    # technique/outcome tortos NAO entram (reason aplica default depois).
+    out = parse_structured('{"response_text": "oi", "technique": "FOO", "outcome": "bar"}')
+    assert "technique" not in out
+    assert "outcome" not in out
+
+
+def test_parse_commitment_null_explicito_e_preservado():
+    # null do LLM = "sem compromisso" -> chave presente com None (vence o fallback).
+    out = parse_structured('{"response_text": "oi", "commitment_category": null}')
+    assert "commitment_category" in out
+    assert out["commitment_category"] is None
+
+
+def test_parse_commitment_invalido_e_omitido():
+    # categoria torta -> omite -> classificador deterministico preenche.
+    out = parse_structured('{"response_text": "oi", "commitment_category": "xyz"}')
+    assert "commitment_category" not in out
+
+
+def test_parse_texto_cru_sem_json_vira_response_text():
+    out = parse_structured("Ola, tudo bem? Como posso ajudar?")
+    assert out["response_text"] == "Ola, tudo bem? Como posso ajudar?"
+    assert "technique" not in out
+
+
+def test_parse_json_embutido_em_prosa_e_extraido():
+    out = parse_structured('Claro! {"response_text": "aqui", "stage": "discovery"} pronto.')
+    assert out["response_text"] == "aqui"
+    assert out["stage"] == "discovery"
+
+
+def test_parse_json_sem_response_text_usa_o_cru():
+    raw = '{"technique": "SPIN"}'
+    out = parse_structured(raw)
+    assert out["response_text"] == raw  # sem fala -> texto cru como ultimo recurso
+    assert out["technique"] is Technique.SPIN
+
+
+def test_parse_stage_vazio_e_omitido():
+    out = parse_structured('{"response_text": "oi", "stage": "   "}')
+    assert "stage" not in out
