@@ -72,3 +72,13 @@ def test_commitment_category_do_gerador_tem_prioridade():
         generate=_gen("À vista fica R$ 1.000.", commitment_category=CommitmentCategory.DESCONTO),
     )
     assert env.commitment_category is CommitmentCategory.DESCONTO
+
+
+def test_commitment_category_none_explicita_do_gerador_vence_heuristico():
+    # gerador decide "sem compromisso" (None explicito) -> heuristico NAO sobrepoe,
+    # mesmo com "desconto" no texto (achado Codex: presenca da chave, nao truthiness).
+    env = reason(
+        _req(),
+        generate=_gen("Nao oferecemos desconto neste curso.", commitment_category=None),
+    )
+    assert env.commitment_category is None

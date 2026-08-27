@@ -26,7 +26,9 @@ from .contract import CommitmentCategory
 # (cartao/boleto/a vista/pix/parcelado).
 _INSTALLMENT_RE = re.compile(r"\b\d+\s*x\b", re.IGNORECASE)
 
-_DISCOUNT_WORDS = ("desconto", "off", "abatimento")
+# Palavra inteira: "off" como substring casava "offline"/"coffee" -> falso
+# desconto (achado Codex). Plurais cobertos por `s?`.
+_DISCOUNT_RE = re.compile(r"\b(?:descontos?|off|abatimentos?)\b", re.IGNORECASE)
 _PRAZO_WORDS = ("prazo", "dias", "semana", "validade", "vencimento")
 _FRETE_WORDS = ("frete",)
 
@@ -47,7 +49,7 @@ def classify_commitment(response_text: str) -> Optional[CommitmentCategory]:
 
     # % pre-envio, no dominio de vendas, e concessao de desconto (alinha D2 do
     # gate financeiro: "% (desconto)").
-    if "%" in response_text or any(w in lowered for w in _DISCOUNT_WORDS):
+    if "%" in response_text or _DISCOUNT_RE.search(response_text):
         return CommitmentCategory.DESCONTO
 
     if "r$" in lowered:

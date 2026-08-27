@@ -49,3 +49,13 @@ def test_parcelamento_explicito_sem_palavra_de_modalidade():
 def test_percentual_isolado_conta_como_desconto():
     # No dominio de vendas, % pre-envio = desconto (alinha com o gate financeiro).
     assert classify_commitment("Aplico 15% pra voce.") == CommitmentCategory.DESCONTO
+
+
+def test_off_como_substring_nao_e_desconto():
+    # "off" dentro de outra palavra nao pode virar desconto (achado Codex).
+    assert classify_commitment("Nosso atendimento offline nao para.") is None
+    assert classify_commitment("Tem coffee break incluso.") is None
+
+
+def test_off_palavra_inteira_ainda_e_desconto():
+    assert classify_commitment("Fechando hoje, sai com off pra voce.") == CommitmentCategory.DESCONTO

@@ -48,8 +48,13 @@ def reason(req: ReasonRequest, generate: GenerateFn = _stub_generate) -> Respons
     outcome: Outcome = gen.get("outcome", Outcome.CONTINUE)
     # Categoria do compromisso: o gerador tem prioridade (structured output do LLM,
     # passo futuro); sem ele, classificador deterministico rotula pelo texto.
-    commitment: Optional[CommitmentCategory] = gen.get("commitment_category") or classify_commitment(
-        response_text
+    # Presenca da CHAVE, nao truthiness: um None EXPLICITO do gerador ("decidi que
+    # nao ha compromisso") tem que vencer o heuristico, senao "nao damos desconto"
+    # vira DESCONTO e o LATE segura um nao-compromisso (achado Codex).
+    commitment: Optional[CommitmentCategory] = (
+        gen["commitment_category"]
+        if "commitment_category" in gen
+        else classify_commitment(response_text)
     )
 
     # Gate financeiro deterministico sobre os fatos da conta (payload) - sem LLM.
