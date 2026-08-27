@@ -92,7 +92,7 @@ def test_parse_json_completo_seta_as_quatro_etiquetas():
     out = parse_structured(raw)
     assert out["response_text"] == "Fica R$ 1.000 a vista. Fechamos hoje?"
     assert out["technique"] is Technique.CIALDINI
-    assert out["stage"] == "closing"
+    assert "stage" not in out  # stage nao e extraido (engine ecoa req.stage)
     assert out["commitment_category"] is CommitmentCategory.PRECO
     assert out["outcome"] is Outcome.CONTINUE
 
@@ -132,7 +132,7 @@ def test_parse_texto_cru_sem_json_vira_response_text():
 def test_parse_json_embutido_em_prosa_e_extraido():
     out = parse_structured('Claro! {"response_text": "aqui", "stage": "discovery"} pronto.')
     assert out["response_text"] == "aqui"
-    assert out["stage"] == "discovery"
+    assert "stage" not in out  # stage nao e extraido
 
 
 def test_parse_json_sem_response_text_usa_o_cru():

@@ -78,7 +78,6 @@ def build_system_prompt(req: ReasonRequest) -> str:
         '{"response_text": "<a fala final ao cliente: curta, natural, pt-BR, '
         'terminando com uma pergunta fechada que avanca a venda>", '
         '"technique": "<VOSS|CHALLENGER|CIALDINI|SPIN>", '
-        '"stage": "<estagio atual da conversa>", '
         '"commitment_category": <"preco"|"prazo"|"forma_pagamento"|"desconto"|"frete"|"outro"|null>, '
         '"outcome": "<continue|close|escalate>"}\n'
         "Use null em commitment_category se a fala NAO assume compromisso comercial."
@@ -143,9 +142,12 @@ def parse_structured(raw: str) -> dict:
     - JSON que QUEBROU (comeca com '{') -> NAO entrega o JSON cru ao cliente
       (achado Codex): salva response_text via regex; sem salvar, escala.
     - response_text vazio/faltando -> usa o texto cru (ultimo recurso).
-    - technique/outcome/stage inválidos ou null -> OMITIDOS (reason aplica default).
+    - technique/outcome inválidos ou null -> OMITIDOS (reason aplica default).
     - commitment_category: enum valido -> setado; null explicito -> None PRESERVADO
       (vence o classificador deterministico); invalido/ausente -> omitido (fallback).
+    - `stage` NAO e extraido de proposito: a engine e stateless e nao e dona da
+      FSM de estagios (o LATE e). A engine sempre ecoa o req.stage; o LLM nao
+      opina sobre estagio (evita stage invalido - decisao do dono do repo).
     """
     data = _extract_json(raw)
     if data is None:
@@ -169,10 +171,6 @@ def parse_structured(raw: str) -> dict:
     outcome = _coerce_enum(data.get("outcome"), Outcome)
     if outcome is not _MISSING and outcome is not None:
         out["outcome"] = outcome
-
-    stage = data.get("stage")
-    if isinstance(stage, str) and stage.strip():
-        out["stage"] = stage
 
     if "commitment_category" in data:
         cat = _coerce_enum(data["commitment_category"], CommitmentCategory)
