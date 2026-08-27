@@ -65,6 +65,21 @@ def test_modalidade_certa_valor_de_outra_block_no_structured_match():
     assert v.findings[0].reason == "no_structured_match"
 
 
+def test_percent_100_no_cartao_block_nao_coincide_com_preco():
+    # 100% NAO e percentual valido; 100 coincide com card_installment.value=100,
+    # mas percent nao pode passar por find_structured_match (achado CodeRabbit).
+    v = check_response("No cartão tenho 100% de desconto.", CANON)
+    assert v.decision == "block"
+    assert v.findings[0].kind == "percent"
+    assert v.findings[0].value == 100.0
+
+
+def test_percent_certo_com_modalidade_no_texto_allow():
+    # 10% e canonico (other_numbers); a modalidade no texto nao afeta o percent.
+    v = check_response("No cartão, aplico 10% de desconto.", CANON)
+    assert v.decision == "allow"
+
+
 def test_sem_dinheiro_allow():
     v = check_response("Quer que eu já reserve sua vaga?", CANON)
     assert v.decision == "allow"

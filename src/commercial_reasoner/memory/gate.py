@@ -78,6 +78,15 @@ def check_response(
                 findings.append(GateFinding(sentence, value, kind, "unknown_number"))
                 continue
 
+            # Percentual so confere contra os percentuais canonicos (other_numbers).
+            # NAO usar find_structured_match: ele casa PricePoint.value, entao
+            # "100% de desconto" passaria por coincidir com um preco de valor 100
+            # (achado CodeRabbit). Preco/parcela seguem por find_structured_match.
+            if kind == "percent":
+                if value not in canonical_facts.other_numbers:
+                    findings.append(GateFinding(sentence, value, kind, "unknown_number"))
+                continue
+
             # Modalidade + valor batem => confere.
             if find_structured_match(value, modality, canonical_facts) is not None:
                 continue
