@@ -53,6 +53,12 @@ def classify_commitment(response_text: str) -> Optional[CommitmentCategory]:
     o que o humano mais precisa aprovar. Reordenar esta cadeia e a unica mudanca
     se o LATE discordar da prioridade.
 
+    ponytail: teto ACEITO (decisao do dono do repo) - com multiplos compromissos
+    numa resposta, so a categoria de maior prioridade e emitida; uma de menor
+    prioridade que a conta exija aprovar (ex.: PRAZO) nao aparece (achado Codex
+    P1). Emitir todas exigiria commitment_category=lista no contrato + LATE;
+    fica pro structured output do LLM (passo 3) e/ou 1 compromisso por resposta.
+
     ponytail: classificador por marcador/palavra-chave (fragil por natureza,
     travado por testes golden). Upgrade path = structured output do LLM (passo 3
     do roadmap), que vira via `gen["commitment_category"]` e tem prioridade.
