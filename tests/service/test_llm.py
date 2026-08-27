@@ -145,3 +145,30 @@ def test_parse_json_sem_response_text_usa_o_cru():
 def test_parse_stage_vazio_e_omitido():
     out = parse_structured('{"response_text": "oi", "stage": "   "}')
     assert "stage" not in out
+
+
+def test_parse_commitment_outro_e_valido():
+    out = parse_structured('{"response_text": "x", "commitment_category": "outro"}')
+    assert out["commitment_category"] is CommitmentCategory.OUTRO
+
+
+def test_parse_json_quebrado_nao_entrega_cru_e_escala():
+    # JSON truncado (comeca com '{', sem response_text salvavel): nunca vai cru ao
+    # cliente -> response_text vazio + escala (achado Codex).
+    out = parse_structured('{"technique": "VOSS", "outc')
+    assert out["response_text"] == ""
+    assert out["outcome"] is Outcome.ESCALATE
+
+
+def test_parse_json_quebrado_salva_a_fala():
+    # JSON quebrou depois, mas da pra recuperar a fala -> usa ela (nao escala).
+    out = parse_structured('{"response_text": "Fica R$ 1.000. Fechamos?", "techni')
+    assert out["response_text"] == "Fica R$ 1.000. Fechamos?"
+    assert out.get("outcome") is not Outcome.ESCALATE
+
+
+def test_parse_prosa_pura_ainda_e_a_fala():
+    # sem '{' = prosa pura do modelo -> a prosa e a fala (nao escala).
+    out = parse_structured("Claro! Posso te ajudar com isso. Quando comeca?")
+    assert out["response_text"].startswith("Claro!")
+    assert "outcome" not in out

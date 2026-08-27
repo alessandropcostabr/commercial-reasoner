@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -78,7 +79,7 @@ def build_system_prompt(req: ReasonRequest) -> str:
         'terminando com uma pergunta fechada que avanca a venda>", '
         '"technique": "<VOSS|CHALLENGER|CIALDINI|SPIN>", '
         '"stage": "<estagio atual da conversa>", '
-        '"commitment_category": <"preco"|"prazo"|"forma_pagamento"|"desconto"|"frete"|null>, '
+        '"commitment_category": <"preco"|"prazo"|"forma_pagamento"|"desconto"|"frete"|"outro"|null>, '
         '"outcome": "<continue|close|escalate>"}\n'
         "Use null em commitment_category se a fala NAO assume compromisso comercial."
     )
@@ -106,6 +107,20 @@ def _extract_json(raw: str) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
+_RESPONSE_TEXT_RE = re.compile(r'"response_text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _salvage_response_text(raw: str) -> Optional[str]:
+    """Tenta recuperar so o valor de response_text de um JSON quebrado."""
+    m = _RESPONSE_TEXT_RE.search(raw)
+    if not m:
+        return None
+    try:
+        return json.loads(f'"{m.group(1)}"')  # desescapa via json
+    except json.JSONDecodeError:
+        return m.group(1)
+
+
 def _coerce_enum(value: Any, enum_cls: type) -> Any:
     """Enum coagido (tolerante a caixa), None se o LLM mandou null, ou _MISSING
     se invalido/nao-string."""
@@ -124,7 +139,9 @@ def parse_structured(raw: str) -> dict:
     """Extrai os campos do envelope da saida do LLM (pura, sem rede).
 
     Regras de leniencia (o fail-safe encadeia no reasoning):
-    - JSON quebrado/ausente -> {"response_text": raw} (texto cru como fala).
+    - prosa pura (sem JSON) -> {"response_text": raw} (a prosa E a fala).
+    - JSON que QUEBROU (comeca com '{') -> NAO entrega o JSON cru ao cliente
+      (achado Codex): salva response_text via regex; sem salvar, escala.
     - response_text vazio/faltando -> usa o texto cru (ultimo recurso).
     - technique/outcome/stage inválidos ou null -> OMITIDOS (reason aplica default).
     - commitment_category: enum valido -> setado; null explicito -> None PRESERVADO
@@ -132,7 +149,14 @@ def parse_structured(raw: str) -> dict:
     """
     data = _extract_json(raw)
     if data is None:
-        return {"response_text": raw}
+        # Sem JSON parseavel. Prosa pura (nao comeca com '{') = a fala. Se tentou
+        # JSON e quebrou, NUNCA mandar o JSON cru ao cliente: salva a fala ou escala.
+        if not raw.lstrip().startswith("{"):
+            return {"response_text": raw}
+        salvaged = _salvage_response_text(raw)
+        if salvaged:
+            return {"response_text": salvaged}
+        return {"response_text": "", "outcome": Outcome.ESCALATE}
 
     out: dict = {}
     rt = data.get("response_text")
