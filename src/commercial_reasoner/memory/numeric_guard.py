@@ -157,21 +157,51 @@ class PlanVerdict:
     family_total: Optional[float]  # total da familia (p/ consumir um total afirmado)
 
 
+def _span_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+    if a[1] <= b[0]:
+        return b[0] - a[1]
+    if b[1] <= a[0]:
+        return a[0] - b[1]
+    return 0
+
+
 def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
-    """Planos de parcelamento afirmados na frase (conta x valor da parcela)."""
-    down_m = _ENTRADA_RE.search(sentence)
-    down = parse_number(down_m.group(1)) if down_m else None
-    down_span = down_m.span() if down_m else None
-    return [
-        InstallmentExpr(
-            count=int(m.group(1)),
-            value=parse_number(m.group(2)),
-            span=m.span(),
-            down=down,
-            down_span=down_span,
+    """Planos de parcelamento afirmados na frase (conta x valor da parcela).
+
+    Cada entrada e associada ao plano MAIS PROXIMO por span (achado CodeRabbit):
+    numa frase com dois planos e duas entradas, a 1ª entrada nao pode vazar pro
+    2º plano. Uma entrada -> um plano; plano sem entrada proxima fica com down=None.
+    """
+    # ponytail: o family-hint (cartao/boleto) ainda e por-FRASE (check_installment_plan),
+    # entao frase com dois planos de FAMILIAS diferentes so e parcialmente coberta -
+    # direcao segura (tende a false-block). Localizar o hint por plano e o upgrade.
+    plans = list(_PLAN_RE.finditer(sentence))
+    if not plans:
+        return []
+    assigned: dict[int, tuple[float, tuple[int, int]]] = {}
+    for em in _ENTRADA_RE.finditer(sentence):
+        espan = em.span()
+        # A entrada SEGUE o seu plano ("Nx ... com entrada de R$ E"): associa ao
+        # plano precedente mais proximo; sem precedente, ao mais proximo por span.
+        preceding = [i for i, p in enumerate(plans) if p.span()[1] <= espan[0]]
+        if preceding:
+            nearest = max(preceding, key=lambda i: plans[i].span()[1])
+        else:
+            nearest = min(range(len(plans)), key=lambda i: _span_distance(plans[i].span(), espan))
+        assigned[nearest] = (parse_number(em.group(1)), espan)
+    exprs = []
+    for i, m in enumerate(plans):
+        down_pair = assigned.get(i)
+        exprs.append(
+            InstallmentExpr(
+                count=int(m.group(1)),
+                value=parse_number(m.group(2)),
+                span=m.span(),
+                down=down_pair[0] if down_pair else None,
+                down_span=down_pair[1] if down_pair else None,
+            )
         )
-        for m in _PLAN_RE.finditer(sentence)
-    ]
+    return exprs
 
 
 def find_total_exprs(sentence: str) -> list[tuple[float, tuple[int, int]]]:

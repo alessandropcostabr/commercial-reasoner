@@ -5,6 +5,7 @@ Sem novos campos: o plano e conferido contra as modalidades irmas do canonical
 sai derivada: (total - entrada) / valor da parcela.
 """
 from commercial_reasoner.memory.gate import check_response
+from commercial_reasoner.memory.numeric_guard import find_installment_exprs
 from commercial_reasoner.memory.types import CanonicalFacts, PricePoint
 
 # Cartao: parcela 100, total 1200 -> 12x derivado (sem entrada).
@@ -124,6 +125,24 @@ def test_total_do_plano_nao_libera_outra_modalidade():
 def test_total_com_palavra_total_ainda_libera():
     v = check_response("No cartao, 12x de R$ 100; total de R$ 1.200.", CANON_CARD)
     assert v.decision == "allow"
+
+
+def test_entrada_associa_ao_plano_precedente():
+    # Dois planos, duas entradas: cada entrada vai pro plano que a precede, nao
+    # a 1ª entrada pra todos os planos (achado CodeRabbit).
+    exprs = find_installment_exprs(
+        "10x de R$ 120 com entrada de R$ 200 ou 4x de R$ 250 com entrada de R$ 100"
+    )
+    assert len(exprs) == 2
+    assert exprs[0].value == 120.0 and exprs[0].down == 200.0
+    assert exprs[1].value == 250.0 and exprs[1].down == 100.0
+
+
+def test_segundo_plano_sem_entrada_nao_herda_a_do_primeiro():
+    # Plano do cartao (sem entrada) nao pode herdar a entrada do plano do boleto.
+    exprs = find_installment_exprs("12x de R$ 100 ou 4x de R$ 250 com entrada de R$ 200")
+    assert exprs[0].value == 100.0 and exprs[0].down is None
+    assert exprs[1].value == 250.0 and exprs[1].down == 200.0
 
 
 def test_conta_com_conectores_verifica():
