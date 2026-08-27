@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Optional
 
 from .types import AuditRecord, CanonicalFacts, Fact, PricePoint
@@ -16,6 +17,15 @@ _NUMBER_RE = re.compile(rf"R\$\s*({_PT_BR_NUMBER})|({_PT_BR_NUMBER})\s*%")
 _ANY_NUMBER_RE = re.compile(_PT_BR_NUMBER)
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+# Modalidades cujo `PricePoint.value` e o VALOR DA PARCELA (nao o total).
+_INSTALLMENT_MODALITIES = ("card_installment", "installment_plan_total")
+
+# Plano de parcelamento afirmado: conta + valor da parcela adjacentes.
+# "12x de R$ 100", "12x R$100", "12 x de R$ 100".
+_PLAN_RE = re.compile(rf"(\d+)\s*x\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
+# Entrada afirmada: "entrada de R$ 200".
+_ENTRADA_RE = re.compile(rf"entrada\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
 
 
 def split_sentences(text: str) -> list[str]:
@@ -80,6 +90,67 @@ def classify_client_number(value: float, canonical_facts: CanonicalFacts) -> Opt
         if price.value == value:
             return price
     return None
+
+
+@dataclass(frozen=True)
+class InstallmentExpr:
+    count: int
+    value: float  # valor da parcela afirmado
+    down: Optional[float]  # entrada afirmada (None = nao mencionada)
+    raw: str  # trecho casado, ex.: "12x de R$ 100"
+
+
+def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
+    """Planos de parcelamento afirmados na frase (conta x valor da parcela)."""
+    down_match = _ENTRADA_RE.search(sentence)
+    down = parse_number(down_match.group(1)) if down_match else None
+    return [
+        InstallmentExpr(
+            count=int(m.group(1)),
+            value=parse_number(m.group(2)),
+            down=down,
+            raw=m.group(0),
+        )
+        for m in _PLAN_RE.finditer(sentence)
+    ]
+
+
+def match_installment_plan(
+    expr: InstallmentExpr, modality_hint: Optional[str], canonical_facts: CanonicalFacts
+) -> Optional[PricePoint]:
+    """Plano canonico que confere com o afirmado, ou None.
+
+    Confere quando: e modalidade de parcela (e a mesma, se o texto deu dica),
+    valor da parcela == expr.value, contagem compativel (plano legado sem
+    `installments` => contagem nao exigida, preserva Item 1; com => tem que
+    bater) e entrada compativel (se o texto afirmou entrada, casa a do plano).
+    """
+    for pp in canonical_facts.prices:
+        if pp.modality not in _INSTALLMENT_MODALITIES:
+            continue
+        if modality_hint is not None and pp.modality != modality_hint:
+            continue
+        if pp.value != expr.value:
+            continue
+        if pp.installments is not None and pp.installments != expr.count:
+            continue
+        if expr.down is not None and pp.down_payment != expr.down:
+            continue
+        return pp
+    return None
+
+
+def plan_verified_values(pp: PricePoint, expr: InstallmentExpr) -> set[float]:
+    """Valores que o plano conferido JA explica na frase (o loop generico nao
+    deve re-checar): valor da parcela, entrada, e o total DERIVADO
+    aritmeticamente (installments * valor + entrada) - esta e a verificacao
+    aritmetica do design §4, sem exigir o total repetido no canonical."""
+    verified = {pp.value, pp.down_payment}
+    if expr.down is not None:
+        verified.add(expr.down)
+    if pp.installments is not None:
+        verified.add(pp.installments * pp.value + pp.down_payment)
+    return verified
 
 
 def check_quote(

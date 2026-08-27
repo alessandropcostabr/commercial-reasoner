@@ -9,11 +9,12 @@ da config) e escalar humano e do INTEGRADOR (LATE), fora deste repo.
 Falha fechada (§6): sem canonical, ou numero ambiguo => block. Um falso-block e
 seguro; um falso-allow (mandar preco errado a cliente real) nao.
 
-Cobertura deste incremento: R$ (amount) e % (percent) conferidos contra o
-canonical; parcela (installment) conferida por modalidade+valor via
-`find_structured_match`. A verificacao ARITMETICA do plano de parcelamento
-(n parcelas x valor + entrada = total) exige estender o canonical (design §4) -
-follow-up; ate la, parcela sem match estruturado = block (conservador).
+Cobertura: R$ (amount) e % (percent) conferidos contra o canonical; parcela
+(installment) conferida ARITMETICAMENTE (design §4) - o plano afirmado
+(nº parcelas x valor da parcela + entrada) tem que casar um plano canonico, e o
+total sai DERIVADO (installments * valor + entrada), sem precisar repeti-lo no
+canonical. Plano legado sem `installments` cai no comportamento do Item 1
+(contagem nao exigida).
 """
 from __future__ import annotations
 
@@ -21,11 +22,15 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 from .numeric_guard import (
+    _INSTALLMENT_MODALITIES,
     _NUMBER_RE,
+    find_installment_exprs,
     find_modality_hint,
     find_structured_match,
     is_within_canonical,
+    match_installment_plan,
     parse_number,
+    plan_verified_values,
     split_sentences,
 )
 from .types import CanonicalFacts
@@ -33,8 +38,6 @@ from .types import CanonicalFacts
 GateDecision = Literal["allow", "block"]
 FindingKind = Literal["amount", "percent", "installment"]
 GateReason = Literal["unknown_number", "no_structured_match"]
-
-_INSTALLMENT_MODALITIES = ("card_installment", "installment_plan_total")
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,33 @@ def check_response(
         modality = find_modality_hint(sentence)
         is_installment = modality in _INSTALLMENT_MODALITIES
 
+        # --- Parcelamento: plano afirmado (conta x parcela + entrada) vs canonical.
+        # Valores ja explicados por um plano conferido nao voltam ao loop generico.
+        consumed: set[float] = set()
+        for expr in find_installment_exprs(sentence):
+            if canonical_facts is None:
+                findings.append(GateFinding(sentence, expr.value, "installment", "unknown_number"))
+                consumed.add(expr.value)
+                if expr.down is not None:
+                    consumed.add(expr.down)
+                continue
+            plan = match_installment_plan(expr, modality, canonical_facts)
+            if plan is not None:
+                consumed |= plan_verified_values(plan, expr)
+            else:
+                # Plano nao confere: valor da parcela inventado, ou conta/entrada
+                # erradas p/ um valor que existe (contagem e a teeth aritmetica).
+                reason: GateReason = (
+                    "no_structured_match"
+                    if is_within_canonical(expr.value, canonical_facts)
+                    else "unknown_number"
+                )
+                findings.append(GateFinding(sentence, expr.value, "installment", reason))
+                consumed.add(expr.value)
+                if expr.down is not None:
+                    consumed.add(expr.down)
+
+        # --- Loop generico: R$/% restantes (pula os ja explicados pelo plano).
         for match in _NUMBER_RE.finditer(sentence):
             amount_raw = match.group(1)  # R$...
             percent_raw = match.group(2)  # ...%
@@ -67,6 +97,8 @@ def check_response(
             if raw is None:
                 continue
             value = parse_number(raw)
+            if value in consumed:
+                continue
             kind: FindingKind = (
                 "percent"
                 if percent_raw is not None

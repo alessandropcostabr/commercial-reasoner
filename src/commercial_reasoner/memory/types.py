@@ -17,6 +17,14 @@ class PricePoint:
     modality: str
     value: float
     description: str = ""
+    # Parcelamento conferivel (design gate financeiro §4). Opcionais p/ NAO
+    # quebrar o Item 1: sem eles, um PricePoint e exatamente o de antes.
+    # Convencao (nao-quebrante): para modalidade de parcela, `value` continua
+    # sendo o VALOR DA PARCELA (como no Item 1), `installments` = nº de parcelas
+    # e `down_payment` = entrada. O total NAO e armazenado - o gate o DERIVA
+    # (installments * value + down_payment), que e a verificacao aritmetica.
+    installments: Optional[int] = None
+    down_payment: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,9 @@ def canonical_from_mapping(data: Optional[Mapping]) -> CanonicalFacts:
     (campo `grounded_facts`), injetados pelo LATE por conta+setor - NAO sao lidos
     por `account_id` da engine (isso amarraria a engine ao estado, quebrando
     multi-canal + concorrencia). Mesma forma do YAML de config:
-    `{prices: [{modality, value, description}], other_numbers: [...]}`.
+    `{prices: [{modality, value, description, installments?, down_payment?}],
+      other_numbers: [...]}`. `installments`/`down_payment` sao opcionais (design
+    gate §4): ausentes => PricePoint identico ao do Item 1.
     """
     data = data or {}
     prices = tuple(
@@ -20,6 +22,10 @@ def canonical_from_mapping(data: Optional[Mapping]) -> CanonicalFacts:
             modality=item["modality"],
             value=float(item["value"]),
             description=item.get("description", ""),
+            installments=(
+                int(item["installments"]) if item.get("installments") is not None else None
+            ),
+            down_payment=float(item.get("down_payment", 0.0)),
         )
         for item in data.get("prices", [])
     )
