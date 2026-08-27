@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from ..memory import canonical_from_mapping, check_response
+from .commitment import classify_commitment
 from .contract import (
     CommitmentCategory,
     Outcome,
@@ -45,7 +46,11 @@ def reason(req: ReasonRequest, generate: GenerateFn = _stub_generate) -> Respons
     response_text: str = gen["response_text"]
     technique: Technique = gen.get("technique", Technique.VOSS)
     outcome: Outcome = gen.get("outcome", Outcome.CONTINUE)
-    commitment: Optional[CommitmentCategory] = gen.get("commitment_category")
+    # Categoria do compromisso: o gerador tem prioridade (structured output do LLM,
+    # passo futuro); sem ele, classificador deterministico rotula pelo texto.
+    commitment: Optional[CommitmentCategory] = gen.get("commitment_category") or classify_commitment(
+        response_text
+    )
 
     # Gate financeiro deterministico sobre os fatos da conta (payload) - sem LLM.
     canonical = canonical_from_mapping(req.grounded_facts.model_dump())
