@@ -13,6 +13,20 @@ Escopo (bullet do roadmap): emite `preco`/`prazo`/`forma_pagamento`/`desconto`/
 `frete` ou None. `CommitmentCategory.OUTRO` fica pra a via do gerador
 (structured output, passo futuro) - um classificador por palavra-chave nao tem
 sinal pra "outro compromisso".
+
+Limitacoes ACEITAS (fallback CONGELADO - decisao do dono do repo). Este e um
+fallback deterministico; o caminho real e o structured output do LLM (passo 3),
+que emite a categoria decidida e supersede tudo abaixo. Cobertura por palavra-
+chave sobre prosa de LLM e whack-a-mole ilimitado, entao PARAMOS aqui. Gaps
+conhecidos (achados Codex nao corrigidos por decisao):
+  - falso-NEGATIVO (perde a categoria): preco por extenso ("1.000 reais", so
+    R$ e detectado); prazo em unidades != dias ("48 horas"); % de desconto sem
+    a palavra "desconto".
+  - falso-POSITIVO (hold indevido): "Nx" de frequencia/comparacao ("2x por
+    semana", "3x mais rapido") vira forma_pagamento; desconto NEGADO ("nao
+    oferecemos desconto") vira desconto.
+  - multi-compromisso: so a categoria de maior prioridade sai (contrato tem 1
+    campo). Ver docstring de `classify_commitment`.
 """
 from __future__ import annotations
 
