@@ -1,8 +1,9 @@
-"""Servico HTTP stateless da engine para o LATE (STUB de contrato - Fase 0).
+"""Servico HTTP stateless da engine para o LATE (contrato Fase 0 + gate Fase 1).
 
-STUB: o reasoning e canned (resposta fixa); TODO o resto do contrato e real
-(schema, event_id prefixado, timestamp, echo do token, assinatura HMAC). Prova
-o CONTRATO ponta a ponta antes de plugar o reasoning real (Fase 1+).
+O reasoning ainda e canned (stub em reasoning._stub_generate); o gate financeiro
+deterministico JA roda sobre os grounded_facts do request (barra dinheiro errado
+antes de qualquer LLM). Todo o resto do contrato e real (schema, event_id,
+timestamp assinado, echo do token, HMAC sobre bytes crus, fail-closed).
 
 Rodar: `uv run --extra service uvicorn commercial_reasoner.service.app:app`
 Env: LATE_WEBHOOK_SECRET (obrigatorio, fail-closed), LATE_WEBHOOK_URL (opcional
@@ -15,17 +16,10 @@ import os
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, status
 
-from .contract import (
-    Outcome,
-    ReasonRequest,
-    ResponseEnvelope,
-    Technique,
-    build_envelope,
-    serialize,
-    sign,
-)
+from . import reasoning
+from .contract import ReasonRequest, serialize, sign
 
-app = FastAPI(title="Commercial Reasoner - contrato LATE (stub)")
+app = FastAPI(title="Commercial Reasoner - contrato LATE (stub) + gate")
 
 
 def _secret() -> str:
@@ -38,20 +32,9 @@ def _secret() -> str:
     return s
 
 
-def _reason_stub(req: ReasonRequest) -> ResponseEnvelope:
-    """Reasoning CANNED. Trocar por Qwen(SOUL+PLAYBOOK)+lib memory na Fase 1."""
-    return build_envelope(
-        req,
-        response_text="(stub) resposta de contrato - reasoning real vem na Fase 1",
-        technique=Technique.VOSS,
-        outcome=Outcome.CONTINUE,
-        commitment_category=None,
-    )
-
-
 async def _deliver(raw: bytes, sig: str) -> None:
     url = os.environ.get("LATE_WEBHOOK_URL")
-    if not url:  # LATE receiver ainda nao existe (Fase 0) - no-op logado
+    if not url:  # LATE receiver ainda nao existe (Fase 0) - no-op
         return
     async with httpx.AsyncClient(timeout=10) as client:
         await client.post(
@@ -67,15 +50,15 @@ async def _deliver(raw: bytes, sig: str) -> None:
 @app.post("/reason", status_code=status.HTTP_202_ACCEPTED)
 async def reason(req: ReasonRequest, background: BackgroundTasks):
     secret = _secret()
-    envelope = _reason_stub(req)
+    envelope = reasoning.reason(req)  # gera + grounding + gate financeiro
     raw = serialize(envelope)
     sig = sign(raw, secret)
-    # Webhook assincrono (o LATE trata como at-least-once do seu lado).
-    background.add_task(_deliver, raw, sig)
+    background.add_task(_deliver, raw, sig)  # webhook assincrono (at-least-once)
     return {
         "accepted": True,
         "correlation_token": req.correlation_token,
         "event_id": envelope.event_id,
+        "outcome": envelope.outcome.value,
     }
 
 
