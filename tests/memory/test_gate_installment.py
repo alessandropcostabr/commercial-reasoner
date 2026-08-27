@@ -111,3 +111,24 @@ def test_plano_sem_total_preserva_item1():
     # canonical legado (sem total): contagem NAO exigida (comportamento Item 1).
     assert check_response("No cartao fica 10x de R$ 100.", CANON_LEGACY).decision == "allow"
     assert check_response("No cartao fica 99x de R$ 100.", CANON_LEGACY).decision == "allow"
+
+
+def test_total_do_plano_nao_libera_outra_modalidade():
+    # 1.200 e o total do plano, mas afirmado como a vista (que e 1.000) -> block.
+    # allowed_totals por valor liberava isso (achado Codex); agora e por contexto.
+    v = check_response("No cartao, 12x de R$ 100; a vista fica R$ 1.200.", CANON_CARD)
+    assert v.decision == "block"
+    assert 1200.0 in {f.value for f in v.findings}
+
+
+def test_total_com_palavra_total_ainda_libera():
+    v = check_response("No cartao, 12x de R$ 100; total de R$ 1.200.", CANON_CARD)
+    assert v.decision == "allow"
+
+
+def test_conta_com_conectores_verifica():
+    # "N parcelas no valor de R$ X" e "N vezes por R$ X" (achado Codex).
+    assert check_response("No cartao, 12 parcelas no valor de R$ 100.", CANON_CARD).decision == "allow"
+    assert check_response("No cartao, 20 parcelas no valor de R$ 100.", CANON_CARD).decision == "block"
+    assert check_response("No cartao, 12 vezes por R$ 100.", CANON_CARD).decision == "allow"
+    assert check_response("No cartao, 20 vezes por R$ 100.", CANON_CARD).decision == "block"

@@ -24,10 +24,12 @@ from typing import Literal, Optional
 
 from .numeric_guard import (
     _NUMBER_RE,
+    _money_eq,
     check_installment_plan,
     find_installment_exprs,
     find_modality_hint,
     find_structured_match,
+    find_total_exprs,
     is_within_canonical,
     parse_number,
     split_sentences,
@@ -72,7 +74,7 @@ def check_response(
 
         # --- Parcelamento: plano afirmado (conta x parcela + entrada) vs canonical.
         consumed_spans: set[tuple[int, int]] = set()
-        allowed_totals: set[float] = set()  # totais de planos conferidos (round p/ cents)
+        confirmed_totals: list[float] = []  # totais canonicos de planos conferidos
         for expr in find_installment_exprs(sentence):
             if canonical_facts is None:
                 findings.append(GateFinding(sentence, expr.value, "installment", "unknown_number"))
@@ -86,7 +88,7 @@ def check_response(
                 consumed_spans.add(expr.down_span)
             if verdict.confers:
                 if verdict.family_total is not None:
-                    allowed_totals.add(round(verdict.family_total, 2))
+                    confirmed_totals.append(verdict.family_total)
             else:
                 reason: GateReason = (
                     "no_structured_match"
@@ -94,6 +96,14 @@ def check_response(
                     else "unknown_number"
                 )
                 findings.append(GateFinding(sentence, expr.value, "installment", reason))
+
+        # Total AFIRMADO ("total R$ T") de um plano conferido: consumido por
+        # CONTEXTO+valor (span do "total"), nao por valor solto - senao um valor
+        # de outra modalidade coincidente escaparia (achado Codex).
+        if confirmed_totals:
+            for tval, tspan in find_total_exprs(sentence):
+                if any(_money_eq(tval, ct) for ct in confirmed_totals):
+                    consumed_spans.add(tspan)
 
         # --- Loop generico: R$/% restantes (pula os spans ja explicados pelo plano).
         for match in _NUMBER_RE.finditer(sentence):
@@ -114,11 +124,6 @@ def check_response(
             # Falha fechada: sem canonical nada confere.
             if canonical_facts is None:
                 findings.append(GateFinding(sentence, value, kind, "unknown_number"))
-                continue
-
-            # Total de plano conferido, afirmado no texto (ex.: "total R$ 1.200")
-            # - liberado por derivacao aritmetica; so p/ amount, nao p/ percent.
-            if kind != "percent" and round(value, 2) in allowed_totals:
                 continue
 
             # Percentual so confere contra os percentuais canonicos (other_numbers).

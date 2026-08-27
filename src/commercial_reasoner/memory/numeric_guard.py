@@ -109,12 +109,21 @@ _FAMILY_ALIASES: dict[str, tuple[str, ...]] = {
     "installment_plan": ("boleto", "parcelad"),
 }
 
-# "12x de R$ 100", "12 parcelas de R$ 100", "12 vezes de R$ 100" (achado Codex:
-# a contagem tambem aparece sem o "x").
+# "12x de R$ 100", "12 parcelas de R$ 100", "12 vezes de R$ 100", e variantes com
+# conectores: "20 parcelas no valor de R$ 100", "20 vezes por R$ 100" (achados
+# Codex: a contagem aparece sem "x" e com conectivos). Os conectores sao um
+# WHITELIST de palavras (nao texto livre) p/ nao emparelhar a contagem com um R$
+# de outra parte da frase. Palavra de modalidade entre a conta e o R$ nao e
+# coberta - ceiling documentado.
 _PLAN_RE = re.compile(
-    rf"(\d+)\s*(?:x|vezes?|parcelas?)\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE
+    rf"(\d+)\s*(?:x|vezes?|parcelas?)\b(?:\s+(?:de|por|a|no|valor|em)){{0,4}}\s*R\$\s*({_PT_BR_NUMBER})",
+    re.IGNORECASE,
 )
 _ENTRADA_RE = re.compile(rf"entrada\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
+# Total AFIRMADO de um plano: "total de R$ 1.200". Consumido por CONTEXTO (a
+# palavra "total") + valor batendo o total canonico - nunca por valor solto,
+# senao "a vista fica R$ 1.200" (outra modalidade) seria liberado (achado Codex).
+_TOTAL_RE = re.compile(rf"total\s*(?:de\s+)?R\$\s*({_PT_BR_NUMBER})", re.IGNORECASE)
 
 
 def _family_of(modality: str) -> Optional[str]:
@@ -163,6 +172,11 @@ def find_installment_exprs(sentence: str) -> list[InstallmentExpr]:
         )
         for m in _PLAN_RE.finditer(sentence)
     ]
+
+
+def find_total_exprs(sentence: str) -> list[tuple[float, tuple[int, int]]]:
+    """Totais AFIRMADOS ("total de R$ T") na frase, com valor e span."""
+    return [(parse_number(m.group(1)), m.span()) for m in _TOTAL_RE.finditer(sentence)]
 
 
 def check_installment_plan(
