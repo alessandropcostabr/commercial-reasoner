@@ -15,10 +15,13 @@ fallback que ja existe no reasoning (classificador deterministico / default VOSS
 Env:
 - LLM_API_KEY   (obrig.) - valor da chave; so vai no header, NUNCA logado.
 - LLM_BASE_URL  (default https://openrouter.ai/api/v1)
-- LLM_MODEL     (default google/gemma-4-31b-it:free)
+- LLM_MODEL     (default qwen/qwen3-30b-a3b-instruct-2507 - pago barato, JSON confiavel)
 - LLM_SOUL_PATH / LLM_PLAYBOOK_PATH (persona + playbook)
 
-Caveat: modelos :free tem limite de rate/cota - teste, nao producao.
+Caveat de CUSTO: o default e um modelo PAGO (centavos por chamada), escolhido por
+confiabilidade de JSON (passo 4). Modelos :free existem no OpenRouter mas dao 429
+(rate/cota) e devolvem prosa - so p/ teste; aponte LLM_MODEL p/ um :free se quiser
+custo zero, ciente do 429.
 """
 from __future__ import annotations
 
