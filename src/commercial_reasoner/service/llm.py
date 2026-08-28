@@ -39,10 +39,13 @@ _DEFAULT_BASE = "https://openrouter.ai/api/v1"
 # sobrescrevivel por LLM_MODEL.
 _DEFAULT_MODEL = "qwen/qwen3-30b-a3b-instruct-2507"
 
-# Retry so em falha TRANSITORIA. 4xx de config (401/400) nao repete - e erro de
-# deploy, tem que falhar alto.
-_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_SECONDS = (0.5, 1.0, 2.0)  # 1 tentativa + 3 retries
+
+
+def _is_transient(status: int) -> bool:
+    """429 + TODA a faixa 5xx (inclui 507/520/522/524 de CDN). Erro nao-transitorio
+    (4xx) nao repete - e do request; escala em vez de levantar (achado Codex)."""
+    return status == 429 or 500 <= status < 600
 
 # SOUL.md traz uma secao de FATOS de EXEMPLO ficticios; os fatos reais vem do
 # grounded_facts (por conta+setor). Remover a secao de exemplo evita o LLM
@@ -220,9 +223,11 @@ def llm_generate(req: ReasonRequest) -> GeneratedTurn:
     }
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
 
-    # Retry so em falha transitoria (429/5xx/timeout/conexao). 4xx de config
-    # (401/400) propaga na hora. Esgotou -> escala (falha fechada, nao derruba o
-    # /reason com 500).
+    # Retry so em falha transitoria (429/5xx/timeout/conexao). Um erro do request
+    # NUNCA levanta daqui: em background (o _process roda apos o 202), um raise
+    # mata a task sem retry nem callback e trava a run do LATE - entao 4xx nao-
+    # transitorio tambem ESCALA. Pre-checks de config (chave/HTTPS) ja levantaram
+    # acima, de proposito (erro de deploy).
     for attempt in range(len(_BACKOFF_SECONDS) + 1):
         try:
             resp = httpx.post(f"{base}/chat/completions", headers=headers, json=payload, timeout=90)
@@ -230,8 +235,8 @@ def llm_generate(req: ReasonRequest) -> GeneratedTurn:
             text = resp.json()["choices"][0]["message"]["content"].strip()
             return GeneratedTurn(**parse_structured(text))
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in _RETRY_STATUS:
-                raise  # erro de config/cliente -> falha alto
+            if not _is_transient(exc.response.status_code):
+                break  # 4xx -> escala (nao repete, nao levanta)
         except httpx.RequestError:
             pass  # timeout/conexao -> transitorio
         if attempt < len(_BACKOFF_SECONDS):

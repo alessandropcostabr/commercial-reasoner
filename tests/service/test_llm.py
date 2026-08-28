@@ -238,7 +238,7 @@ def test_llm_generate_429_persistente_escala(monkeypatch):
     assert turn["outcome"] is Outcome.ESCALATE
 
 
-def test_llm_generate_401_nao_repete_e_levanta(monkeypatch):
+def test_llm_generate_4xx_escala_sem_repetir(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "k")
     monkeypatch.setattr(_L.time, "sleep", lambda *_: None)
     calls = {"n": 0}
@@ -248,6 +248,23 @@ def test_llm_generate_401_nao_repete_e_levanta(monkeypatch):
         return _resp(401)
 
     monkeypatch.setattr(_L.httpx, "post", fake_post)
-    with pytest.raises(_L.httpx.HTTPStatusError):
-        _L.llm_generate(_req())
-    assert calls["n"] == 1  # erro de config nao repete
+    # em background, um raise trava a run do LATE -> 4xx escala em vez de levantar.
+    turn = _L.llm_generate(_req())
+    assert turn["outcome"] is Outcome.ESCALATE
+    assert calls["n"] == 1  # 4xx nao repete
+
+
+def test_llm_generate_5xx_fora_do_allowlist_antigo_faz_retry(monkeypatch):
+    # 520 (Cloudflare) estava fora do {429,500,502,503,504} antigo (achado Codex).
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setattr(_L.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        return _resp(520) if calls["n"] < 2 else _resp(200)
+
+    monkeypatch.setattr(_L.httpx, "post", fake_post)
+    turn = _L.llm_generate(_req())
+    assert turn["response_text"] == "oi"
+    assert calls["n"] == 2  # 520 e transitorio -> repetiu
