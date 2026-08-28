@@ -123,10 +123,11 @@ def test_parse_commitment_invalido_e_omitido():
     assert "commitment_category" not in out
 
 
-def test_parse_texto_cru_sem_json_vira_response_text():
+def test_parse_texto_cru_sem_json_escala():
+    # prosa sem JSON = falha do modelo confiavel -> escala (:166, passo 4).
     out = parse_structured("Ola, tudo bem? Como posso ajudar?")
     assert out["response_text"] == "Ola, tudo bem? Como posso ajudar?"
-    assert "technique" not in out
+    assert out["outcome"] is Outcome.ESCALATE
 
 
 def test_parse_json_embutido_em_prosa_e_extraido():
@@ -168,18 +169,18 @@ def test_parse_json_quebrado_nao_entrega_cru_e_escala():
     assert out["outcome"] is Outcome.ESCALATE
 
 
-def test_parse_json_quebrado_salva_a_fala():
-    # JSON quebrou depois, mas da pra recuperar a fala -> usa ela (nao escala).
+def test_parse_json_quebrado_salva_a_fala_mas_escala():
+    # recupera a fala como contexto, mas sem metadata confiavel -> escala (:166).
     out = parse_structured('{"response_text": "Fica R$ 1.000. Fechamos?", "techni')
     assert out["response_text"] == "Fica R$ 1.000. Fechamos?"
-    assert out.get("outcome") is not Outcome.ESCALATE
+    assert out["outcome"] is Outcome.ESCALATE
 
 
-def test_parse_prosa_pura_ainda_e_a_fala():
-    # sem '{' = prosa pura do modelo -> a prosa e a fala (nao escala).
+def test_parse_prosa_pura_escala():
+    # sem JSON estruturado -> escala, preservando a fala so como contexto (:166).
     out = parse_structured("Claro! Posso te ajudar com isso. Quando comeca?")
     assert out["response_text"].startswith("Claro!")
-    assert "outcome" not in out
+    assert out["outcome"] is Outcome.ESCALATE
 
 
 def test_parse_saida_vazia_escala():
@@ -202,3 +203,51 @@ def test_parse_cerca_de_codigo_malformada_escala():
 def test_parse_cerca_sem_json_valido_nao_vai_crua():
     out = parse_structured("```\nalguma coisa\n```")
     assert "```" not in out["response_text"]
+
+
+# --- retry/resiliencia (httpx mockado, sem rede) -------------------------------
+import commercial_reasoner.service.llm as _L
+
+
+def _resp(status, content='{"response_text": "oi", "outcome": "continue"}'):
+    req = _L.httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    return _L.httpx.Response(status, json={"choices": [{"message": {"content": content}}]}, request=req)
+
+
+def test_llm_generate_retry_em_429_depois_sucesso(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setattr(_L.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        return _resp(429) if calls["n"] < 3 else _resp(200)
+
+    monkeypatch.setattr(_L.httpx, "post", fake_post)
+    turn = _L.llm_generate(_req())
+    assert turn["response_text"] == "oi"
+    assert calls["n"] == 3  # 2 falhas + 1 sucesso
+
+
+def test_llm_generate_429_persistente_escala(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setattr(_L.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(_L.httpx, "post", lambda url, **kw: _resp(429))
+    turn = _L.llm_generate(_req())
+    assert turn["response_text"] == ""
+    assert turn["outcome"] is Outcome.ESCALATE
+
+
+def test_llm_generate_401_nao_repete_e_levanta(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    monkeypatch.setattr(_L.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def fake_post(url, **kw):
+        calls["n"] += 1
+        return _resp(401)
+
+    monkeypatch.setattr(_L.httpx, "post", fake_post)
+    with pytest.raises(_L.httpx.HTTPStatusError):
+        _L.llm_generate(_req())
+    assert calls["n"] == 1  # erro de config nao repete
