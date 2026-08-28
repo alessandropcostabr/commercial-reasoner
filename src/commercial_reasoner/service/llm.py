@@ -15,16 +15,20 @@ fallback que ja existe no reasoning (classificador deterministico / default VOSS
 Env:
 - LLM_API_KEY   (obrig.) - valor da chave; so vai no header, NUNCA logado.
 - LLM_BASE_URL  (default https://openrouter.ai/api/v1)
-- LLM_MODEL     (default google/gemma-4-31b-it:free)
+- LLM_MODEL     (default qwen/qwen3-30b-a3b-instruct-2507 - pago barato, JSON confiavel)
 - LLM_SOUL_PATH / LLM_PLAYBOOK_PATH (persona + playbook)
 
-Caveat: modelos :free tem limite de rate/cota - teste, nao producao.
+Caveat de CUSTO: o default e um modelo PAGO (centavos por chamada), escolhido por
+confiabilidade de JSON (passo 4). Modelos :free existem no OpenRouter mas dao 429
+(rate/cota) e devolvem prosa - so p/ teste; aponte LLM_MODEL p/ um :free se quiser
+custo zero, ciente do 429.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -34,7 +38,17 @@ from .contract import CommitmentCategory, Outcome, ReasonRequest, Technique
 from .reasoning import GeneratedTurn
 
 _DEFAULT_BASE = "https://openrouter.ai/api/v1"
-_DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+# Modelo de producao (passo 4): pago barato, JSON confiavel, bom pt-BR. Ainda
+# sobrescrevivel por LLM_MODEL.
+_DEFAULT_MODEL = "qwen/qwen3-30b-a3b-instruct-2507"
+
+_BACKOFF_SECONDS = (0.5, 1.0, 2.0)  # 1 tentativa + 3 retries
+
+
+def _is_transient(status: int) -> bool:
+    """429 + TODA a faixa 5xx (inclui 507/520/522/524 de CDN). Erro nao-transitorio
+    (4xx) nao repete - e do request; escala em vez de levantar (achado Codex)."""
+    return status == 429 or 500 <= status < 600
 
 # SOUL.md traz uma secao de FATOS de EXEMPLO ficticios; os fatos reais vem do
 # grounded_facts (por conta+setor). Remover a secao de exemplo evita o LLM
@@ -140,10 +154,10 @@ def _coerce_enum(value: Any, enum_cls: type) -> Any:
 def parse_structured(raw: str) -> dict:
     """Extrai os campos do envelope da saida do LLM (pura, sem rede).
 
-    Regras de leniencia (o fail-safe encadeia no reasoning):
-    - prosa pura (sem JSON) -> {"response_text": raw} (a prosa E a fala).
-    - JSON que QUEBROU (comeca com '{') -> NAO entrega o JSON cru ao cliente
-      (achado Codex): salva response_text via regex; sem salvar, escala.
+    Regras (fail-safe encadeia no reasoning). So JSON limpo com fala usavel segue
+    normal; qualquer outra saida escala (:166, passo 4 - modelo confiavel):
+    - sem JSON estruturado (prosa, salvada de truncado, vazia, cercada) -> escala
+      (outcome=escalate), preservando a fala recuperavel so como contexto.
     - JSON valido mas response_text faltando/null/vazio -> falha fechada
       (response_text="" + outcome=escalate); nunca serializa o objeto como fala.
     - technique/outcome inválidos ou null -> OMITIDOS (reason aplica default).
@@ -155,16 +169,19 @@ def parse_structured(raw: str) -> dict:
     """
     data = _extract_json(raw)
     if data is None:
-        # Sem JSON parseavel. Primeiro tenta salvar a fala de um JSON/cerca
-        # truncado; depois so entrega se for PROSA pura: texto nao-vazio, sem '{'
-        # e sem cerca de codigo (`). Vazio/whitespace, JSON-ish ou cercado
-        # malformado NUNCA vao crus ao cliente -> falha fechada (achado Codex).
+        # :166 (passo 4): com modelo JSON confiavel, QUALQUER saida sem JSON
+        # estruturado limpo (prosa, salvada de truncado, vazia, cercada) e uma
+        # FALHA do modelo -> escala (nao da pra estabelecer metadata de seguranca).
+        # Preserva a fala recuperavel so como contexto (no escalate o LATE usa o
+        # template seguro).
         salvaged = _salvage_response_text(raw)
         if salvaged:
-            return {"response_text": salvaged}
-        if raw.strip() and "{" not in raw and "`" not in raw:
-            return {"response_text": raw}
-        return {"response_text": "", "outcome": Outcome.ESCALATE}
+            text = salvaged
+        elif raw.strip() and "{" not in raw and "`" not in raw:
+            text = raw
+        else:
+            text = ""
+        return {"response_text": text, "outcome": Outcome.ESCALATE}
 
     out: dict = {}
     rt = data.get("response_text")
@@ -200,19 +217,32 @@ def llm_generate(req: ReasonRequest) -> GeneratedTurn:
     if not base.lower().startswith("https://"):  # nunca mandar o bearer em cleartext (L91)
         raise RuntimeError("LLM_BASE_URL deve ser HTTPS")
     model = os.environ.get("LLM_MODEL", _DEFAULT_MODEL)
+    payload = {
+        "model": model,
+        "messages": build_messages(req),
+        "temperature": 0.4,
+        "max_tokens": 500,
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
 
-    resp = httpx.post(
-        f"{base}/chat/completions",
-        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-        json={
-            "model": model,
-            "messages": build_messages(req),
-            "temperature": 0.4,
-            "max_tokens": 500,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=90,
-    )
-    resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"].strip()
-    return GeneratedTurn(**parse_structured(text))
+    # Retry so em falha transitoria (429/5xx/timeout/conexao). Um erro do request
+    # NUNCA levanta daqui: em background (o _process roda apos o 202), um raise
+    # mata a task sem retry nem callback e trava a run do LATE - entao 4xx nao-
+    # transitorio tambem ESCALA. Pre-checks de config (chave/HTTPS) ja levantaram
+    # acima, de proposito (erro de deploy).
+    for attempt in range(len(_BACKOFF_SECONDS) + 1):
+        try:
+            resp = httpx.post(f"{base}/chat/completions", headers=headers, json=payload, timeout=90)
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"].strip()
+            return GeneratedTurn(**parse_structured(text))
+        except httpx.HTTPStatusError as exc:
+            if not _is_transient(exc.response.status_code):
+                break  # 4xx -> escala (nao repete, nao levanta)
+        except httpx.RequestError:
+            pass  # timeout/conexao -> transitorio
+        if attempt < len(_BACKOFF_SECONDS):
+            time.sleep(_BACKOFF_SECONDS[attempt])
+
+    return GeneratedTurn(response_text="", outcome=Outcome.ESCALATE)
