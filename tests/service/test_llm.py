@@ -135,11 +135,19 @@ def test_parse_json_embutido_em_prosa_e_extraido():
     assert "stage" not in out  # stage nao e extraido
 
 
-def test_parse_json_sem_response_text_usa_o_cru():
-    raw = '{"technique": "SPIN"}'
-    out = parse_structured(raw)
-    assert out["response_text"] == raw  # sem fala -> texto cru como ultimo recurso
-    assert out["technique"] is Technique.SPIN
+def test_parse_json_valido_sem_response_text_escala():
+    # JSON valido mas sem fala -> nao serializa o objeto como texto; escala (achado Codex).
+    out = parse_structured('{"technique": "SPIN"}')
+    assert out["response_text"] == ""
+    assert out["outcome"] is Outcome.ESCALATE
+    assert "technique" not in out  # sem fala, as demais etiquetas nao importam
+
+
+def test_parse_response_text_null_ou_vazio_escala():
+    for raw in ('{"response_text": null, "technique": "VOSS"}', '{"response_text": "   "}'):
+        out = parse_structured(raw)
+        assert out["response_text"] == ""
+        assert out["outcome"] is Outcome.ESCALATE
 
 
 def test_parse_stage_vazio_e_omitido():

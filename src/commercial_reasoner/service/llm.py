@@ -80,7 +80,10 @@ def build_system_prompt(req: ReasonRequest) -> str:
         '"technique": "<VOSS|CHALLENGER|CIALDINI|SPIN>", '
         '"commitment_category": <"preco"|"prazo"|"forma_pagamento"|"desconto"|"frete"|"outro"|null>, '
         '"outcome": "<continue|close|escalate>"}\n'
-        "Use null em commitment_category se a fala NAO assume compromisso comercial."
+        "Use null em commitment_category se a fala NAO assume compromisso comercial. "
+        "Faca NO MAXIMO um compromisso comercial por fala; se tocar mais de um, "
+        "escolha em commitment_category o de MAIOR prioridade de aprovacao: "
+        "desconto > preco > forma_pagamento > frete > prazo."
     )
 
 
@@ -141,7 +144,8 @@ def parse_structured(raw: str) -> dict:
     - prosa pura (sem JSON) -> {"response_text": raw} (a prosa E a fala).
     - JSON que QUEBROU (comeca com '{') -> NAO entrega o JSON cru ao cliente
       (achado Codex): salva response_text via regex; sem salvar, escala.
-    - response_text vazio/faltando -> usa o texto cru (ultimo recurso).
+    - JSON valido mas response_text faltando/null/vazio -> falha fechada
+      (response_text="" + outcome=escalate); nunca serializa o objeto como fala.
     - technique/outcome inválidos ou null -> OMITIDOS (reason aplica default).
     - commitment_category: enum valido -> setado; null explicito -> None PRESERVADO
       (vence o classificador deterministico); invalido/ausente -> omitido (fallback).
@@ -162,7 +166,13 @@ def parse_structured(raw: str) -> dict:
 
     out: dict = {}
     rt = data.get("response_text")
-    out["response_text"] = rt if isinstance(rt, str) and rt.strip() else raw
+    if not (isinstance(rt, str) and rt.strip()):
+        # JSON valido mas sem fala usavel (faltando/null/vazio): NAO entregar o
+        # objeto serializado como texto ao cliente (achado Codex) - falha fechada,
+        # escala. O _extract_json passou, entao o safeguard de JSON-quebrado nao
+        # pega este caso; e o mesmo perigo por outro branch.
+        return {"response_text": "", "outcome": Outcome.ESCALATE}
+    out["response_text"] = rt
 
     tech = _coerce_enum(data.get("technique"), Technique)
     if tech is not _MISSING and tech is not None:
