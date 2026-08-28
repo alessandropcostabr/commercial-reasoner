@@ -35,8 +35,12 @@ Corpo JSON:
 | `message` | string | sim | mensagem atual do cliente |
 | `history` | array de `{ role: "user"\|"bot", text }` | sim | **com proveniência**; ver §6 (a fala do bot NÃO é fonte de fato) |
 | `grounded_facts` | objeto | sim | fatos verdadeiros da conta+setor (preço, vagas, datas, condições) injetados por chamada |
-| `rapport` | objeto/número | sim | estado de rapport acumulado |
-| `stage` | string (enum FSM) | sim | estágio de venda atual |
+| `rapport` | objeto/número/`null` | sim | estado de rapport acumulado |
+| `stage` | string livre | sim | estágio de venda atual; a engine ECOA no response, não valida contra FSM (o LATE é dono da FSM) |
+
+> **Medido (`contract.py::ReasonRequest`):** a engine aceita `history`/`grounded_facts`/`rapport`
+> AUSENTES (defaults `[]` / vazio / `null`) - a obrigatoriedade acima é do lado do LATE, que sempre
+> envia. Só `correlation_token`, `message` e `stage` não têm default na engine.
 
 **Regra de ouro (já implementada na engine):** a engine responde usando **só** `grounded_facts` +
 o que o cliente disse. Nunca inventa número/preço/data. `history` é contexto conversacional, **não**
@@ -56,14 +60,20 @@ domínio = envelope rejeitado por inteiro + escalonamento humano (não é "categ
 | `correlation_token` | string | sim | **echo** exato do token do request (§2) |
 | `response_text` | string | sim | texto a enviar ao cliente |
 | `technique` | string (enum) | sim | `VOSS`\|`CHALLENGER`\|`CIALDINI`\|`SPIN` |
-| `rapport` | objeto/número | sim | rapport atualizado |
-| `stage` | string (enum FSM) | sim | estágio atualizado |
-| `bant` | objeto `{budget,authority,need,timeline}` 0-10 | opcional | rastreabilidade de prontidão |
-| `commitment_category` | enum | sim | `null`\|`preco`\|`prazo`\|`forma_pagamento`\|`desconto`\|`frete`\|`outro` (§5) |
+| `rapport` | objeto/número/`null` | sim (campo presente) | rapport atualizado; `null` é válido (sem rapport) |
+| `stage` | string livre | sim | **echo** de `req.stage`; a engine não valida contra FSM - o LATE valida por IGUALDADE com o stage enviado |
+| `bant` | objeto/`null` | sim (campo presente, valor nullable) | present-with-`null` quando ausente; a engine NÃO enforça a forma `{budget,authority,need,timeline}` 0-10 (dict livre) - o LATE valida a forma se precisar |
+| `commitment_category` | enum/`null` | sim (campo presente) | `null`\|`preco`\|`prazo`\|`forma_pagamento`\|`desconto`\|`frete`\|`outro` (§5) |
 | `outcome` | enum | sim | `continue`\|`close`\|`escalate` |
 
 Grafia, obrigatoriedade, tipo e domínio de **cada** campo têm de ser fixados contra o envelope real
 (a validação estrita do LATE rejeita o que divergir).
+
+> **Medido (`contract.py::ResponseEnvelope`):** a engine implementa o schema de forma mais PERMISSIVA
+> que o ideal - `stage` string livre (echo), `rapport`/`bant`/`commitment_category` nullable e sempre
+> presentes, forma de `bant` não enforçada. A validação estrita é responsabilidade do LATE (Fase 5):
+> valida `stage` por igualdade com o request, tolera os campos present-with-`null`, e checa a forma de
+> `bant` do seu lado.
 
 ---
 
@@ -121,7 +131,7 @@ não na engine. A engine **classifica**; o LATE **trava**.
 > **Status:** Gate medido em 2026-08-28 contra este repo @ master 2ef8106; 5/6 itens provados, o de autenticação HMAC pende do ajuste do verificador no consumidor.
 
 - [x] `POST /reason` e o webhook existem e trafegam o schema das §§2-3 (envelope real capturado).
-- [x] Schema COMPLETO da resposta medido: grafia/obrigatoriedade/tipo/domínio de cada campo.
+- [x] Schema COMPLETO da resposta medido: grafia/obrigatoriedade/tipo/domínio de cada campo. As §§2-3 foram ALINHADAS à implementação `contract.py` (Codex #9): `stage` echo/livre, `rapport`/`bant`/`commitment_category` nullable e presentes, engine permissiva + LATE valida estrito.
 - [x] `commitment_category` estruturada é emitida (não inferida do texto), confirmado com modelo real (Qwen).
 - [x] `event_id` prefixado global + `timestamp` assinado + echo do `correlation_token` no callback.
 - [ ] Um callback assinado real **autentica** pelo middleware do LATE. **PENDENTE do fix do consumidor**: a REGRA de canonicalização foi provada (o verificador deve computar HMAC-SHA256 sobre o rawBody e comparar em base64; a assinatura real da engine bate), mas a autenticação ponta a ponta só passa após o consumidor ajustar seu verificador. A engine já assina corretamente: `base64(HMAC-SHA256(rawBody))`.
