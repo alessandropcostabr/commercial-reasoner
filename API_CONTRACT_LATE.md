@@ -34,13 +34,26 @@ Corpo JSON:
 | `correlation_token` | string (opaco) | sim | o LATE casa o callback por ele; a engine só ecoa |
 | `message` | string | sim | mensagem atual do cliente |
 | `history` | array de `{ role: "user"\|"bot", text }` | sim | **com proveniência**; ver §6 (a fala do bot NÃO é fonte de fato) |
-| `grounded_facts` | objeto | sim | fatos verdadeiros da conta+setor (preço, vagas, datas, condições) injetados por chamada |
+| `grounded_facts` | objeto tipado (ver abaixo) | sim | fatos verdadeiros da conta+setor injetados por chamada |
 | `rapport` | objeto/número/`null` | sim | estado de rapport acumulado |
 | `stage` | string livre | sim | estágio de venda atual; a engine ECOA no response, não valida contra FSM (o LATE é dono da FSM) |
 
 > **Medido (`contract.py::ReasonRequest`):** a engine aceita `history`/`grounded_facts`/`rapport`
 > AUSENTES (defaults `[]` / vazio / `null`) - a obrigatoriedade acima é do lado do LATE, que sempre
 > envia. Só `correlation_token`, `message` e `stage` não têm default na engine.
+
+> **Forma EXATA de `grounded_facts` (`contract.py::GroundedFacts`, Codex #9):** a engine só lê duas
+> chaves e **ignora silenciosamente qualquer outra** (Pydantic descarta extras). Um objeto genérico
+> tipo `{"preco": 1200}` resulta em fatos VAZIOS e a engine raciocina sem grounding. Enviar exatamente:
+> ```json
+> {
+>   "prices": [{ "modality": "string", "value": 0.0, "description": "string (opcional)" }],
+>   "other_numbers": [0.0]
+> }
+> ```
+> `prices[].modality` e `prices[].value` são obrigatórios (payload malformado = 422). "Vagas, datas,
+> condições" do texto antigo NÃO têm campo próprio hoje: modelar como `prices`/`other_numbers` ou
+> estender a engine antes de usar.
 
 **Regra de ouro (já implementada na engine):** a engine responde usando **só** `grounded_facts` +
 o que o cliente disse. Nunca inventa número/preço/data. `history` é contexto conversacional, **não**
