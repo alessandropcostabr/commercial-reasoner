@@ -118,13 +118,14 @@ não na engine. A engine **classifica**; o LATE **trava**.
 
 ## 7. Gate da Fase 0 (o que provar antes de codar o conector LATE)
 
-- [ ] `POST /reason` e o webhook existem e trafegam o schema das §§2-3 (envelope real capturado).
-- [ ] Schema COMPLETO da resposta medido: grafia/obrigatoriedade/tipo/domínio de cada campo.
-- [ ] `commitment_category` estruturada é emitida (não inferida do texto).
-- [ ] `event_id` prefixado global + `timestamp` assinado + echo do `correlation_token` no callback.
-- [ ] Um callback assinado real **autentica** pelo middleware do LATE (canonicalização HMAC provada
-      ponta a ponta — bytes crus vs re-stringify resolvido).
-- [ ] Idempotência remota por `correlation_token` (ou aceite explícito do at-least-once do LATE).
+> **Status:** Gate medido em 2026-08-28 contra este repo @ master 2ef8106; 5/6 itens provados, o de autenticação HMAC pende do ajuste do verificador no consumidor.
+
+- [x] `POST /reason` e o webhook existem e trafegam o schema das §§2-3 (envelope real capturado).
+- [x] Schema COMPLETO da resposta medido: grafia/obrigatoriedade/tipo/domínio de cada campo.
+- [x] `commitment_category` estruturada é emitida (não inferida do texto), confirmado com modelo real (Qwen).
+- [x] `event_id` prefixado global + `timestamp` assinado + echo do `correlation_token` no callback.
+- [ ] Um callback assinado real **autentica** pelo middleware do LATE. **PENDENTE do fix do consumidor**: a REGRA de canonicalização foi provada (o verificador deve computar HMAC-SHA256 sobre o rawBody e comparar em base64; a assinatura real da engine bate), mas a autenticação ponta a ponta só passa após o consumidor ajustar seu verificador. A engine já assina corretamente: `base64(HMAC-SHA256(rawBody))`.
+- [x] Idempotência remota por `correlation_token`: a engine deriva `event_id` determinístico (uuid5 do token), o mesmo token produz o mesmo `event_id` (dedup de callback no ledger do consumidor). NOTA: é idempotência de CALLBACK, não de trabalho (a engine re-executa o reasoning no retry); o consumidor trata seu lado como at-least-once.
 
 Enquanto estes itens não forem provados contra a engine REAL, o módulo LATE não abre — é o gate.
 
