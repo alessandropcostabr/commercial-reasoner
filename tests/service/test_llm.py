@@ -180,3 +180,25 @@ def test_parse_prosa_pura_ainda_e_a_fala():
     out = parse_structured("Claro! Posso te ajudar com isso. Quando comeca?")
     assert out["response_text"].startswith("Claro!")
     assert "outcome" not in out
+
+
+def test_parse_saida_vazia_escala():
+    for raw in ("", "   ", "\n\t "):
+        out = parse_structured(raw)
+        assert out["response_text"] == ""
+        assert out["outcome"] is Outcome.ESCALATE
+
+
+def test_parse_cerca_de_codigo_malformada_escala():
+    # ```json + JSON truncado: nao comeca com '{' mas NAO e prosa - nao vai cru.
+    out = parse_structured("```json\n{\"response_text\": \"oi\", \"techni")
+    assert out["response_text"] == "" or out["response_text"] == "oi"
+    # se nao salvou a fala, tem que escalar; se salvou, a fala e limpa (sem cerca).
+    if out["response_text"] == "":
+        assert out["outcome"] is Outcome.ESCALATE
+    assert "```" not in out["response_text"]
+
+
+def test_parse_cerca_sem_json_valido_nao_vai_crua():
+    out = parse_structured("```\nalguma coisa\n```")
+    assert "```" not in out["response_text"]

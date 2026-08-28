@@ -155,13 +155,15 @@ def parse_structured(raw: str) -> dict:
     """
     data = _extract_json(raw)
     if data is None:
-        # Sem JSON parseavel. Prosa pura (nao comeca com '{') = a fala. Se tentou
-        # JSON e quebrou, NUNCA mandar o JSON cru ao cliente: salva a fala ou escala.
-        if not raw.lstrip().startswith("{"):
-            return {"response_text": raw}
+        # Sem JSON parseavel. Primeiro tenta salvar a fala de um JSON/cerca
+        # truncado; depois so entrega se for PROSA pura: texto nao-vazio, sem '{'
+        # e sem cerca de codigo (`). Vazio/whitespace, JSON-ish ou cercado
+        # malformado NUNCA vao crus ao cliente -> falha fechada (achado Codex).
         salvaged = _salvage_response_text(raw)
         if salvaged:
             return {"response_text": salvaged}
+        if raw.strip() and "{" not in raw and "`" not in raw:
+            return {"response_text": raw}
         return {"response_text": "", "outcome": Outcome.ESCALATE}
 
     out: dict = {}
