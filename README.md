@@ -32,9 +32,8 @@ This principle is carried at two levels of different strength:
 
 What the numeric scan does:
 
-- Every `R$` amount and `%` in the reply is matched with regex and checked against the
-  `grounded_facts` sent for that conversation. An amount that isn't in the table is
-  blocked, no exceptions.
+- Every well-formed `R$` amount and `%` in the reply is matched with regex against the
+  `grounded_facts` sent for that conversation; an amount that isn't in the table is blocked.
 - Installment plans get an **arithmetic check**, not just a lookup: **when the family
   total is present** in the grounded facts, `(total - down payment) / installment value`
   is derived and compared against the number of installments the reply claims. For legacy
@@ -49,6 +48,12 @@ What the numeric scan does:
   to `escalate` and still returns the original `response_text` in the callback. Keeping it
   away from the customer depends on the integrator (e.g. LATE) honoring `escalate` and
   holding the reply for human review instead of auto-sending.
+
+Scope of the numeric gate: it operates on parsed `R$`/`%` tokens and resolves one payment
+modality per sentence, so it is a deterministic backstop for well-formed monetary claims,
+not a formal proof. Unusual numeric formats (e.g. signed values) or a single sentence mixing
+several modality hints can fall outside its checks; prompt-level grounding remains the first
+line for those cases.
 
 ## How it works
 
