@@ -73,7 +73,7 @@ domínio = envelope rejeitado por inteiro + escalonamento humano (não é "categ
 | `correlation_token` | string | sim | **echo** exato do token do request (§2) |
 | `response_text` | string | sim | texto a enviar ao cliente |
 | `technique` | string (enum) | sim | `VOSS`\|`CHALLENGER`\|`CIALDINI`\|`SPIN` |
-| `rapport` | objeto/número/`null` | sim (campo presente) | rapport atualizado; `null` é válido (sem rapport) |
+| `rapport` | objeto/número/`null` | sim (campo presente) | hoje: **echo** de `req.rapport` (lógica de atualização planejada, ainda não implementada); `null` é válido (sem rapport) |
 | `stage` | string livre | sim | **echo** de `req.stage`; a engine não valida contra FSM - o LATE valida por IGUALDADE com o stage enviado |
 | `bant` | objeto/`null` | sim (campo presente, valor nullable) | present-with-`null` quando ausente; a engine NÃO enforça a forma `{budget,authority,need,timeline}` 0-10 (dict livre) - o LATE valida a forma se precisar |
 | `commitment_category` | enum/`null` | sim (campo presente) | `null`\|`preco`\|`prazo`\|`forma_pagamento`\|`desconto`\|`frete`\|`outro` (§5) |
@@ -105,9 +105,14 @@ Grafia, obrigatoriedade, tipo e domínio de **cada** campo têm de ser fixados c
   *(Nota p/ o LATE: o verificador de assinatura deve computar o HMAC sobre o rawBody recebido, nunca
   sobre um JSON re-serializado.)*
 - **Idempotência do lado da engine.** O LATE pode **re-enviar o mesmo request** (retry pós-crash do
-  worker). A engine deve tratar requests com o **mesmo `correlation_token` de forma idempotente** —
-  não refazer trabalho nem gerar callbacks divergentes. (Alternativa aceita pelo LATE: o LATE trata o
-  request como at-least-once do seu lado, mas idempotência remota por token é mais barata e segura.)
+  worker, ou retry pós-timeout one-shot da Fase 2b).
+  - **Hoje:** só o **callback** é idempotente - `event_id` determinístico (uuid5 do `correlation_token`)
+    deduplica a entrega no ledger do LATE (ver §7). A engine **NÃO** deduplica o trabalho: um retry com o
+    mesmo `correlation_token` re-executa o reasoning (novo custo de LLM, e a resposta pode divergir da
+    execução anterior). Por isso o LATE trata seu lado como at-least-once e não assume que o retry pula o
+    reprocessamento.
+  - **Planejado (roadmap):** idempotência de **trabalho** por `correlation_token` na engine - mesmo token
+    não refaz o reasoning nem gera callbacks divergentes. Enquanto não implementado, vale o "Hoje" acima.
 
 ---
 
