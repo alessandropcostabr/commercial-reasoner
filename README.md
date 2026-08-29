@@ -42,12 +42,13 @@ What the numeric scan does:
   the count is not arithmetically enforced.
 - **Wrong or invented numbers fail closed.** An amount not present in the grounded facts is
   blocked; an amount that exists but is asserted for the wrong modality (e.g. "à vista R$
-  1.200" when cash is R$ 1.000) is blocked; an asserted down payment that doesn't match the
-  family's is blocked. A correct amount stated without a specific modality is allowed (it's
-  a valid figure). The gate reasons over payment modalities, not product identity.
-- A blocked reply never reaches the customer: it flips the response `outcome` to
-  `escalate` so the integrator (e.g. LATE) can hold it for human review instead of
-  auto-sending.
+  1.200" when cash is R$ 1.000) is blocked. A correct amount stated without a specific
+  modality is allowed (it's a valid figure). The gate reasons over payment modalities, not
+  product identity.
+- On a block, the engine does not suppress the text itself: it flips the response `outcome`
+  to `escalate` and still returns the original `response_text` in the callback. Keeping it
+  away from the customer depends on the integrator (e.g. LATE) honoring `escalate` and
+  holding the reply for human review instead of auto-sending.
 
 ## How it works
 
