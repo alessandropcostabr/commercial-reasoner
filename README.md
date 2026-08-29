@@ -25,12 +25,15 @@ reply before it goes out:
 - Every `R$` amount and `%` in the reply is matched with regex and checked against the
   `grounded_facts` sent for that conversation. An amount that isn't in the table is
   blocked, no exceptions.
-- Installment plans get an **arithmetic check**, not just a lookup: `(total - down
-  payment) / installment value` is derived from the grounded facts and compared against
-  the number of installments the reply actually claims.
-- **Fail-closed on ambiguity.** Two payment plans, two down payments, or two product
-  families in the same sentence can't be safely linked to the right numbers, so the gate
-  blocks rather than risk matching the wrong ones.
+- Installment plans get an **arithmetic check**, not just a lookup: **when the family
+  total is present** in the grounded facts, `(total - down payment) / installment value`
+  is derived and compared against the number of installments the reply claims. For legacy
+  facts that carry only the installment value and no total, the amount is still matched but
+  the count is not arithmetically enforced.
+- **Ambiguity fails closed.** When a sentence mixes two payment families (card vs
+  installment plan), two down payments, or amounts that can't be uniquely tied to a
+  grounded fact, the gate blocks rather than risk matching the wrong number. (The gate
+  reasons over payment modalities, not product identity.)
 - A blocked reply never reaches the customer: it flips the response `outcome` to
   `escalate` so the integrator (e.g. LATE) can hold it for human review instead of
   auto-sending.
