@@ -6,20 +6,28 @@ LLM); roda em threadpool p/ NAO bloquear o event loop (L99). LLM real so com fla
 COMMERCIAL_REASONER_LLM=llm + chave; default = stub deterministico.
 
 Rodar: `uv run --extra service uvicorn commercial_reasoner.service.app:app`
-Env: LATE_WEBHOOK_SECRET (obrig., fail-closed), LATE_WEBHOOK_URL (opcional).
+Env: LATE_WEBHOOK_SECRET (callback obrig., fail-closed),
+LATE_ENGINE_INGRESS_SECRET(S) (ingresso obrig., fail-closed), LATE_WEBHOOK_URL (opcional).
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hashlib
+import hmac
 import os
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
+from pydantic import ValidationError
 
 from . import reasoning
 from .contract import ReasonRequest, make_event_id, serialize, sign
 
 app = FastAPI(title="Commercial Reasoner - contrato LATE + gate + reasoning")
+
+MAX_REASON_BYTES = 16 * 1024
 
 
 def _generator():
@@ -44,6 +52,35 @@ def _secret() -> str:
     return s
 
 
+def _ingress_secrets() -> tuple[str, ...]:
+    configured = os.environ.get("LATE_ENGINE_INGRESS_SECRETS")
+    secrets = tuple(secret.strip() for secret in configured.split(",") if secret.strip()) if configured else ()
+    if not secrets:
+        legacy = os.environ.get("LATE_ENGINE_INGRESS_SECRET")
+        secrets = (legacy,) if legacy else ()
+    if not secrets:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="segredo de ingresso ausente",
+        )
+    return secrets
+
+
+def _verify_ingress_signature(request: Request, raw: bytes) -> None:
+    values = request.headers.getlist("webhook-signature")
+    if len(values) != 1:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="assinatura ausente ou duplicada")
+    try:
+        received = base64.b64decode(values[0], validate=True)
+    except (ValueError, binascii.Error):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="assinatura invalida") from None
+    if not any(
+        hmac.compare_digest(received, hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).digest())
+        for secret in _ingress_secrets()
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="assinatura invalida")
+
+
 async def _deliver(raw: bytes, sig: str) -> None:
     url = os.environ.get("LATE_WEBHOOK_URL")
     if not url:  # LATE receiver ainda nao existe (Fase 0) - no-op
@@ -65,7 +102,15 @@ async def _process(req: ReasonRequest, secret: str) -> None:
 
 
 @app.post("/reason", status_code=status.HTTP_202_ACCEPTED)
-async def reason(req: ReasonRequest, background: BackgroundTasks):
+async def reason(request: Request, background: BackgroundTasks):
+    raw = await request.body()
+    if len(raw) > MAX_REASON_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="corpo excede limite")
+    _verify_ingress_signature(request, raw)
+    try:
+        req = ReasonRequest.model_validate_json(raw)
+    except ValidationError:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="payload invalido") from None
     secret = _secret()  # fail-closed cedo, antes de aceitar
     background.add_task(_process, req, secret)
     return {

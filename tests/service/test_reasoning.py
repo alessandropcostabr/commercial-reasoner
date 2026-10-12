@@ -1,6 +1,11 @@
 """Fase 1 - loader + gate ligados no /reason: dinheiro errado -> escala."""
+import uuid
+
 from commercial_reasoner.service.contract import CommitmentCategory, Outcome, ReasonRequest, Technique
 from commercial_reasoner.service.reasoning import GeneratedTurn, reason
+
+
+TOKEN = str(uuid.UUID(int=3))
 
 
 def _req(with_facts: bool = True) -> ReasonRequest:
@@ -10,7 +15,7 @@ def _req(with_facts: bool = True) -> ReasonRequest:
         else {}
     )
     return ReasonRequest(
-        correlation_token="tok",
+        correlation_token=TOKEN,
         message="quanto custa?",
         history=[],
         grounded_facts=gf,
@@ -54,7 +59,7 @@ def test_grounded_facts_vazio_com_dinheiro_escala():
 
 def test_stub_default_gera_envelope_valido_e_continua():
     env = reason(_req())  # gerador stub (sem dinheiro)
-    assert env.correlation_token == "tok"
+    assert env.correlation_token == TOKEN
     assert env.event_id.startswith("commercial-reasoner:")
     assert env.outcome is Outcome.CONTINUE
 

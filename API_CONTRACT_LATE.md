@@ -1,6 +1,6 @@
 # Contrato de API LATE ↔ Commercial Reasoner (engine)
 
-**Data:** 2026-08-27
+**Data:** 2026-10-12
 **Lado:** especificação escrita pelo LATE (consumidor). É o **gate bloqueante** da integração:
 enquanto a engine não expuser este contrato, o módulo LATE não pode ser codado (plano-sobre-plano).
 **Fonte de verdade:** a especificação completa vive no repositório privado do LATE; este documento é
@@ -27,33 +27,38 @@ LATE  ◄──POST webhook──  engine        (engine devolve resposta + meta
 
 ## 2. Request — `POST /reason` (LATE → engine)
 
+Antes do parse, a engine aceita no máximo 16 KiB e exige exatamente um
+`Webhook-Signature: base64(hmac-sha256(rawBody, ingress-secret))`. A assinatura usa
+os bytes crus recebidos. Corpo grande retorna 413; assinatura ausente, duplicada,
+malformada ou inválida retorna 401; segredo de ingresso ausente retorna 503; JSON ou
+schema inválido retorna 422. Nenhuma dessas respostas cria tarefa de background ou
+callback. `LATE_ENGINE_INGRESS_SECRET` configura a chave ativa; durante rotação,
+`LATE_ENGINE_INGRESS_SECRETS` é uma lista ordenada, separada por vírgula, das chaves
+aceitas. O segredo de ingresso é exclusivo de LATE → engine e nunca é o segredo do
+callback engine → LATE.
+
 Corpo JSON:
 
 | Campo | Tipo | Obrigatório | Nota |
 |---|---|---|---|
-| `correlation_token` | string (opaco) | sim | o LATE casa o callback por ele; a engine só ecoa |
-| `message` | string | sim | mensagem atual do cliente |
-| `history` | array de `{ role: "user"\|"bot", text }` | sim | **com proveniência**; ver §6 (a fala do bot NÃO é fonte de fato) |
-| `grounded_facts` | objeto tipado (ver abaixo) | sim | fatos verdadeiros da conta+setor injetados por chamada |
-| `rapport` | objeto/número/`null` | sim | estado de rapport acumulado |
-| `stage` | string livre | sim | estágio de venda atual; a engine ECOA no response, não valida contra FSM (o LATE é dono da FSM) |
+| `correlation_token` | UUID string | sim | chave da run, ecoada no callback |
+| `message` | string 1..4096 | sim | mensagem atual do cliente |
+| `history` | até 20 `{ role: "user"\|"bot", text: string 1..1000 }` | não | contexto, nunca fonte de fato |
+| `grounded_facts` | objeto fechado (ver abaixo) | não | fatos verdadeiros da conta+setor injetados por chamada |
+| `rapport` | `null`, número finito ou objeto JSON | não | objeto até 2 KiB/profundidade 3 |
+| `stage` | string 1..100 | sim | estágio de venda atual, ecoado sem validar a FSM |
 
-> **Medido (`contract.py::ReasonRequest`):** a engine aceita `history`/`grounded_facts`/`rapport`
-> AUSENTES (defaults `[]` / vazio / `null`) - a obrigatoriedade acima é do lado do LATE, que sempre
-> envia. Só `correlation_token`, `message` e `stage` não têm default na engine.
-
-> **Forma EXATA de `grounded_facts` (`contract.py::GroundedFacts`, Codex #9):** a engine só lê duas
-> chaves e **ignora silenciosamente qualquer outra** (Pydantic descarta extras). Um objeto genérico
-> tipo `{"preco": 1200}` resulta em fatos VAZIOS e a engine raciocina sem grounding. Enviar exatamente:
+> **Forma EXATA de `grounded_facts`:** a engine rejeita chaves desconhecidas e coerção de tipos.
+> Enviar exatamente:
 > ```json
 > {
 >   "prices": [{ "modality": "string", "value": 0.0, "description": "string (opcional)" }],
 >   "other_numbers": [0.0]
 > }
 > ```
-> `prices[].modality` e `prices[].value` são obrigatórios (payload malformado = 422). "Vagas, datas,
-> condições" do texto antigo NÃO têm campo próprio hoje: modelar como `prices`/`other_numbers` ou
-> estender a engine antes de usar.
+> `prices` e `other_numbers` aceitam no máximo 20 itens; `prices[].modality` é 1..80,
+> `description` é opcional até 200, e todo número é finito entre 0 e 10.000.000.
+> Booleano, string numérica, `null`, preço sem `value` e chave extra retornam 422.
 
 **Regra de ouro (já implementada na engine):** a engine responde usando **só** `grounded_facts` +
 o que o cliente disse. Nunca inventa número/preço/data. `history` é contexto conversacional, **não**
@@ -104,15 +109,11 @@ Grafia, obrigatoriedade, tipo e domínio de **cada** campo têm de ser fixados c
   secret))>`. Secret compartilhado via variável de ambiente (nunca hardcodado).
   *(Nota p/ o LATE: o verificador de assinatura deve computar o HMAC sobre o rawBody recebido, nunca
   sobre um JSON re-serializado.)*
-- **Idempotência do lado da engine.** O LATE pode **re-enviar o mesmo request** (retry pós-crash do
-  worker, ou retry pós-timeout one-shot da Fase 2b).
-  - **Hoje:** só o **callback** é idempotente - `event_id` determinístico (uuid5 do `correlation_token`)
-    deduplica a entrega no ledger do LATE (ver §7). A engine **NÃO** deduplica o trabalho: um retry com o
-    mesmo `correlation_token` re-executa o reasoning (novo custo de LLM, e a resposta pode divergir da
-    execução anterior). Por isso o LATE trata seu lado como at-least-once e não assume que o retry pula o
-    reprocessamento.
-  - **Planejado (roadmap):** idempotência de **trabalho** por `correlation_token` na engine - mesmo token
-    não refaz o reasoning nem gera callbacks divergentes. Enquanto não implementado, vale o "Hoje" acima.
+- **Idempotência de v1.** O LATE pode re-enviar o mesmo request. A engine é
+  deliberadamente stateless e *at-least-once*: ela pode repetir o reasoning e o
+  callback. O `event_id` determinístico (uuid5 do `correlation_token`) e o ledger
+  durável do LATE garantem que apenas uma transição/efeito seja aplicado na run.
+  Não há store local nem lock distribuído na engine nesta versão.
 
 ---
 
@@ -144,15 +145,18 @@ não na engine. A engine **classifica**; o LATE **trava**.
 
 ---
 
-## 7. Gate da Fase 0 (o que provar antes de codar o conector LATE)
+## 7. Gate de ativação
 
-> **Status:** Gate medido em 2026-08-28 contra este repo @ master 2ef8106; 5/6 itens provados, o de autenticação HMAC pende do ajuste do verificador no consumidor.
+> **Status em 12 de outubro de 2026:** o contrato de entrada `/reason` já valida
+> limite, HMAC sobre raw body e schema estrito antes da tarefa. A ativação permanece
+> bloqueada até o LATE provisionar a chave de saída distinta, a borda privada e os
+> testes ponta a ponta definidos na SPEC privada.
 
-- [x] `POST /reason` e o webhook existem e trafegam o schema das §§2-3 (envelope real capturado).
-- [x] Schema COMPLETO da resposta medido: grafia/obrigatoriedade/tipo/domínio de cada campo. As §§2-3 foram ALINHADAS à implementação `contract.py` (Codex #9): `stage` echo/livre, `rapport`/`bant`/`commitment_category` nullable e presentes, engine permissiva + LATE valida estrito.
+- [x] `POST /reason` e o webhook existem e trafegam o schema das §§2-3.
+- [x] Entrada autenticada: limite de 16 KiB, HMAC base64 sobre raw body, schema estrito e rotação finita de chave.
 - [x] `commitment_category` estruturada é emitida (não inferida do texto), confirmado com modelo real (Qwen).
 - [x] `event_id` prefixado global + `timestamp` assinado + echo do `correlation_token` no callback.
-- [ ] Um callback assinado real **autentica** pelo middleware do LATE. **PENDENTE do fix do consumidor**: a REGRA de canonicalização foi provada (o verificador deve computar HMAC-SHA256 sobre o rawBody e comparar em base64; a assinatura real da engine bate), mas a autenticação ponta a ponta só passa após o consumidor ajustar seu verificador. A engine já assina corretamente: `base64(HMAC-SHA256(rawBody))`.
+- [ ] Um callback assinado real autentica pelo middleware do LATE na borda de DEV com as duas chaves de direção provisionadas.
 - [x] Idempotência remota por `correlation_token`: a engine deriva `event_id` determinístico (uuid5 do token), o mesmo token produz o mesmo `event_id` (dedup de callback no ledger do consumidor). NOTA: é idempotência de CALLBACK, não de trabalho (a engine re-executa o reasoning no retry); o consumidor trata seu lado como at-least-once.
 
 Enquanto estes itens não forem provados contra a engine REAL, o módulo LATE não abre — é o gate.
