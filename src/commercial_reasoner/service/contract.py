@@ -14,12 +14,13 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Namespace fixo para uuid5 -> event_id deterministico por correlation_token.
 # Deterministico = idempotente: um retry do LATE (mesmo token) produz o MESMO
@@ -56,33 +57,93 @@ class Outcome(str, Enum):
 RapportT = Union[dict, float, int, None]
 
 
-class Turn(BaseModel):
+class StrictContractModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class Turn(StrictContractModel):
     # Proveniencia obrigatoria: `role='bot'` e contexto conversacional, NUNCA
     # fonte de fato (so `grounded_facts` e o cliente sao autoritativos).
     role: Literal["user", "bot"]
-    text: str
+    text: str = Field(min_length=1, max_length=1000)
 
 
-class PricePointIn(BaseModel):
-    modality: str
+class PricePointIn(StrictContractModel):
+    modality: str = Field(min_length=1, max_length=80)
     value: float
-    description: str = ""
+    description: str | None = Field(default=None, max_length=200)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def value_is_bounded_real(cls, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("value deve ser numero finito")
+        if not 0 <= value <= 10_000_000:
+            raise ValueError("value fora do dominio")
+        return float(value)
 
 
-class GroundedFacts(BaseModel):
+class GroundedFacts(StrictContractModel):
     # Fatos da conta+setor injetados pelo LATE. Tipado na fronteira: payload
     # malformado (ex.: price sem `value`) vira 422 do FastAPI, nao 500 (L52).
-    prices: list[PricePointIn] = []
-    other_numbers: list[float] = []
+    prices: list[PricePointIn] = Field(default_factory=list, max_length=20)
+    other_numbers: list[float] = Field(default_factory=list, max_length=20)
+
+    @field_validator("other_numbers", mode="before")
+    @classmethod
+    def numbers_are_bounded_reals(cls, values):
+        if not isinstance(values, list):
+            raise ValueError("other_numbers deve ser lista")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) or not 0 <= value <= 10_000_000 for value in values):
+            raise ValueError("other_numbers deve conter numeros finitos no dominio")
+        return [float(value) for value in values]
 
 
-class ReasonRequest(BaseModel):
-    correlation_token: str
-    message: str
-    history: list[Turn] = []
-    grounded_facts: GroundedFacts = GroundedFacts()
+class ReasonRequest(StrictContractModel):
+    correlation_token: str = Field(min_length=1, max_length=36)
+    message: str = Field(min_length=1, max_length=4096)
+    history: list[Turn] = Field(default_factory=list, max_length=20)
+    grounded_facts: GroundedFacts = Field(default_factory=GroundedFacts)
     rapport: RapportT = None
-    stage: str
+    stage: str = Field(min_length=1, max_length=100)
+
+    @field_validator("correlation_token")
+    @classmethod
+    def correlation_token_is_uuid(cls, value):
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            raise ValueError("correlation_token deve ser UUID") from None
+        return value
+
+    @field_validator("rapport", mode="before")
+    @classmethod
+    def rapport_is_bounded_json(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, bool):
+            raise ValueError("rapport nao aceita booleano")
+        if isinstance(value, (int, float)):
+            if not math.isfinite(value):
+                raise ValueError("rapport deve ser numero finito")
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("rapport deve ser objeto, numero ou null")
+        try:
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        except (TypeError, ValueError):
+            raise ValueError("rapport deve ser JSON") from None
+        if len(encoded) > 2048 or _json_depth(value) > 3:
+            raise ValueError("rapport excede o contrato")
+        return value
+
+
+def _json_depth(value) -> int:
+    if not isinstance(value, (dict, list)):
+        return 0
+    values = value.values() if isinstance(value, dict) else value
+    return 1 + max((_json_depth(item) for item in values), default=0)
 
 
 class ResponseEnvelope(BaseModel):
@@ -100,7 +161,7 @@ class ResponseEnvelope(BaseModel):
 
 def make_event_id(correlation_token: str) -> str:
     """event_id prefixado global e deterministico por token (L41)."""
-    return _EVENT_PREFIX + str(uuid.uuid5(_EVENT_NS, correlation_token))
+    return _EVENT_PREFIX + str(uuid.uuid5(_EVENT_NS, str(correlation_token)))
 
 
 def build_envelope(

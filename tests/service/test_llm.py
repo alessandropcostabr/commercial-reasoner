@@ -4,6 +4,7 @@ O teste de integracao real so roda com LLM_INTEGRATION=1 (nunca no CI, mesmo
 que uma chave vaze no ambiente) - evita chamada paga/rate-limit no pipeline.
 """
 import os
+import uuid
 
 import pytest
 
@@ -25,7 +26,7 @@ _PLAYBOOK = "# Playbook\nTecnica por calor do lead."
 
 def _req() -> ReasonRequest:
     return ReasonRequest(
-        correlation_token="t",
+        correlation_token=str(uuid.UUID(int=4)),
         message="quanto custa?",
         history=[{"role": "user", "text": "oi"}, {"role": "bot", "text": "ola!"}],
         grounded_facts={"prices": [{"modality": "upfront", "value": 1000}]},

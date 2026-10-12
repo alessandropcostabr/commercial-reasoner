@@ -7,6 +7,7 @@ import base64
 import hashlib
 import hmac
 import json
+import uuid
 
 from commercial_reasoner.service.contract import (
     CommitmentCategory,
@@ -20,12 +21,16 @@ from commercial_reasoner.service.contract import (
 )
 
 
-def _req(token: str = "tok-abc") -> ReasonRequest:
+TOKEN = str(uuid.UUID(int=1))
+SECOND_TOKEN = str(uuid.UUID(int=2))
+
+
+def _req(token: str = TOKEN) -> ReasonRequest:
     return ReasonRequest(
         correlation_token=token,
         message="quanto custa o curso?",
         history=[{"role": "user", "text": "quanto custa o curso?"}],
-        grounded_facts={"preco": 1200},
+        grounded_facts={"prices": [{"modality": "a vista", "value": 1200}]},
         rapport={"heat": "morno"},
         stage="qualifying",
     )
@@ -42,12 +47,12 @@ def test_event_id_prefixado_global_e_deterministico_por_token():
 
 def test_envelope_ecoa_token_e_herda_stage_do_request():
     env = build_envelope(
-        _req("tok-xyz"),
+        _req(SECOND_TOKEN),
         response_text="oi",
         technique=Technique.VOSS,
         outcome=Outcome.CONTINUE,
     )
-    assert env.correlation_token == "tok-xyz"  # echo obrigatorio
+    assert env.correlation_token == SECOND_TOKEN  # echo obrigatorio
     assert env.event_id.startswith("commercial-reasoner:")
     assert env.timestamp.endswith("Z")
     assert env.stage == "qualifying"  # herdado do request se nao sobrescrito
@@ -82,7 +87,7 @@ def test_hmac_e_sobre_os_bytes_crus_enviados_L58():
     ).decode()
     assert sig == expected
     # Os bytes assinados sao JSON valido e round-trip identico ao token.
-    assert json.loads(raw)["correlation_token"] == "tok-abc"
+    assert json.loads(raw)["correlation_token"] == TOKEN
 
 
 def test_schema_completo_serializa_valores_json_nativos():
