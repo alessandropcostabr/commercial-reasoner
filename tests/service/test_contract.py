@@ -9,6 +9,9 @@ import hmac
 import json
 import uuid
 
+import pytest
+from pydantic import ValidationError
+
 from commercial_reasoner.service.contract import (
     CommitmentCategory,
     Outcome,
@@ -123,3 +126,22 @@ def test_serialize_null_quando_sem_compromisso():
     )
     d = json.loads(serialize(env))
     assert d["commitment_category"] is None  # JSON null, nao a string "null"
+
+
+def test_playbook_ausente_e_string_vazia_tem_semanticas_distintas():
+    assert _req().playbook is None
+    assert _req().model_copy(update={"playbook": ""}).playbook == ""
+
+
+@pytest.mark.parametrize("invalid", [None, 7, True, "é" * 1025, "\ud800"])
+def test_playbook_rejeita_tipo_bytes_e_unicode_invalidos(invalid):
+    payload = _req().model_dump(exclude={"playbook"})
+    payload["playbook"] = invalid
+    with pytest.raises(ValidationError):
+        ReasonRequest.model_validate(payload)
+
+
+def test_playbook_aceita_limite_exato_em_utf8():
+    payload = _req().model_dump(exclude={"playbook"})
+    payload["playbook"] = "é" * 1024
+    assert ReasonRequest.model_validate(payload).playbook == payload["playbook"]

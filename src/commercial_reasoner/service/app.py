@@ -16,6 +16,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import logging
 import os
 
 import httpx
@@ -26,6 +27,7 @@ from . import reasoning
 from .contract import ReasonRequest, make_event_id, serialize, sign
 
 app = FastAPI(title="Commercial Reasoner - contrato LATE + gate + reasoning")
+logger = logging.getLogger(__name__)
 
 MAX_REASON_BYTES = 16 * 1024
 
@@ -112,6 +114,9 @@ async def reason(request: Request, background: BackgroundTasks):
     except ValidationError:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="payload invalido") from None
     secret = _secret()  # fail-closed cedo, antes de aceitar
+    if req.playbook is None:
+        # LEGACY_COMPAT_ALLOWED card=#2790 remove_by=2026-12-31: cada linha e uma chamada contavel.
+        logger.warning("legacy_playbook_absent count=1")
     background.add_task(_process, req, secret)
     return {
         "accepted": True,

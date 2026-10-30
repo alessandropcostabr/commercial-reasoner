@@ -57,6 +57,24 @@ def test_system_prompt_usa_so_grounded_e_ignora_exemplos(monkeypatch, tmp_path):
     assert "pergunta fechada" in sp
 
 
+def test_playbook_do_request_substitui_arquivo_global_e_vazio_o_suprime(monkeypatch, tmp_path):
+    global_file = tmp_path / "global.md"
+    global_file.write_text("REGRA GLOBAL NAO USAR", encoding="utf-8")
+    monkeypatch.setenv("LLM_PLAYBOOK_PATH", str(global_file))
+    req = _req().model_copy(update={"playbook": "Converse com clareza."})
+    prompt = build_system_prompt(req)
+    assert "Converse com clareza." in prompt
+    assert "REGRA GLOBAL NAO USAR" not in prompt
+    assert '"value": 1000' in prompt
+
+    empty_prompt = build_system_prompt(_req().model_copy(update={"playbook": ""}))
+    assert "REGRA GLOBAL NAO USAR" not in empty_prompt
+    assert "Converse com clareza." not in empty_prompt
+
+    legacy_prompt = build_system_prompt(_req())
+    assert "REGRA GLOBAL NAO USAR" in legacy_prompt
+
+
 def test_messages_monta_system_history_user(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_SOUL_PATH", str(tmp_path / "nao_existe.md"))
     monkeypatch.setenv("LLM_PLAYBOOK_PATH", str(tmp_path / "nao_existe2.md"))

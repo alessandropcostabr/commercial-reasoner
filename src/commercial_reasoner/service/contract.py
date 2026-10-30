@@ -105,8 +105,22 @@ class ReasonRequest(StrictContractModel):
     message: str = Field(min_length=1, max_length=4096)
     history: list[Turn] = Field(default_factory=list, max_length=20)
     grounded_facts: GroundedFacts = Field(default_factory=GroundedFacts)
+    playbook: str | None = None
     rapport: RapportT = None
     stage: str = Field(min_length=1, max_length=100)
+
+    @field_validator("playbook", mode="before")
+    @classmethod
+    def playbook_is_bounded_utf8(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("playbook deve ser string")
+        try:
+            size = len(value.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise ValueError("playbook deve ser UTF-8 valido") from None
+        if size > 2048:
+            raise ValueError("playbook excede 2048 bytes")
+        return value
 
     @field_validator("correlation_token")
     @classmethod

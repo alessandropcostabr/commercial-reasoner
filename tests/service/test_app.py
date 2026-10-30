@@ -34,10 +34,11 @@ def _post(client, payload):
     return client.post("/reason", content=raw, headers={"Webhook-Signature": signature})
 
 
-def test_reason_aceita_e_devolve_202_com_event_id(monkeypatch):
+def test_reason_aceita_e_devolve_202_com_event_id(monkeypatch, caplog):
     client, _ = _client(monkeypatch)
     r = _post(client, _payload())
     assert r.status_code == 202
+    assert "legacy_playbook_absent count=1" in caplog.text
     body = r.json()
     assert body["accepted"] is True
     assert body["correlation_token"]
@@ -135,3 +136,46 @@ def test_reason_rejeita_token_e_rapport_fora_do_contrato(monkeypatch):
     payload = _payload()
     payload["rapport"] = {"a": {"b": {"c": {"d": 1}}}}
     assert _post(client, payload).status_code == 422
+
+
+def test_playbook_assinado_chega_ao_prompt_sem_arquivo_global(monkeypatch, tmp_path, caplog):
+    import commercial_reasoner.service.app as appmod
+    from commercial_reasoner.service.contract import Outcome, Technique, build_envelope
+    from commercial_reasoner.service.llm import build_system_prompt
+
+    global_file = tmp_path / "global.md"
+    global_file.write_text("REGRA GLOBAL NAO USAR", encoding="utf-8")
+    monkeypatch.setenv("LLM_PLAYBOOK_PATH", str(global_file))
+    client, _ = _client(monkeypatch)
+    captured = {}
+
+    def fake_reason(req, _generate):
+        captured["prompt"] = build_system_prompt(req)
+        return build_envelope(req, response_text="Olá.", technique=Technique.VOSS, outcome=Outcome.CONTINUE)
+
+    monkeypatch.setattr(appmod.reasoning, "reason", fake_reason)
+    payload = _payload()
+    payload["playbook"] = "Use perguntas curtas para o Instituto ExemploVet."
+    assert _post(client, payload).status_code == 202
+    assert "legacy_playbook_absent count=1" not in caplog.text
+    assert payload["playbook"] in captured["prompt"]
+    assert "REGRA GLOBAL NAO USAR" not in captured["prompt"]
+    assert '"value": 1200' in captured["prompt"]
+
+
+def test_playbook_invalido_retorna_422_antes_da_task(monkeypatch):
+    client, _ = _client(monkeypatch)
+    for value in (None, 7, "é" * 1025):
+        payload = _payload()
+        payload["playbook"] = value
+        assert _post(client, payload).status_code == 422
+
+
+def test_corpo_assinado_valido_acima_de_16_kib_retorna_413(monkeypatch):
+    client, _ = _client(monkeypatch)
+    payload = _payload()
+    payload["playbook"] = "é" * 1024
+    payload["message"] = "á" * 4096
+    payload["history"] = [{"role": "user", "text": "ç" * 1000}] * 5
+    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 16 * 1024
+    assert _post(client, payload).status_code == 413
