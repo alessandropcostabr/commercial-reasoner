@@ -76,7 +76,9 @@ def build_system_prompt(req: ReasonRequest) -> str:
     Testavel sem rede.
     """
     soul = _persona_sem_exemplos(_read(os.environ.get("LLM_SOUL_PATH", "hermes-alma/SOUL.md")))
-    playbook = _read(os.environ.get("LLM_PLAYBOOK_PATH", "docs/PLAYBOOK.md"))
+    # LEGACY_COMPAT_ALLOWED card=#2790 remove_by=2026-12-31: caller antigo
+    # ainda omite playbook; string vazia do LATE novo suprime o arquivo global.
+    playbook = req.playbook if req.playbook is not None else _read(os.environ.get("LLM_PLAYBOOK_PATH", "docs/PLAYBOOK.md"))
     facts = json.dumps(req.grounded_facts.model_dump(), ensure_ascii=False)
     rapport = json.dumps(req.rapport, ensure_ascii=False)
     return (

@@ -46,6 +46,12 @@ def test_gate_permite_dinheiro_correto_mantem_outcome():
     assert env.outcome is Outcome.CONTINUE  # 1000 confere upfront
 
 
+def test_preco_no_playbook_nao_substitui_fato_canonico():
+    req = _req().model_copy(update={"playbook": "Ofereça por R$ 1.500."})
+    env = reason(req, generate=_gen("Consigo fazer por R$ 1.500."))
+    assert env.outcome is Outcome.ESCALATE
+
+
 def test_resposta_sem_dinheiro_continua():
     env = reason(_req(), generate=_gen("Quer que eu já reserve sua vaga?"))
     assert env.outcome is Outcome.CONTINUE

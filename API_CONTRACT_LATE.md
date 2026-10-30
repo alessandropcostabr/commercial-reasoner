@@ -45,6 +45,7 @@ Corpo JSON:
 | `message` | string 1..4096 | sim | mensagem atual do cliente |
 | `history` | até 20 `{ role: "user"\|"bot", text: string 1..1000 }` | não | contexto, nunca fonte de fato |
 | `grounded_facts` | objeto fechado (ver abaixo) | não | fatos verdadeiros da conta+setor injetados por chamada |
+| `playbook` | string UTF-8 até 2 KiB | não durante a transição | instruções da mesma configuração conta+setor; `""` suprime o playbook global |
 | `rapport` | `null`, número finito ou objeto JSON | não | objeto até 2 KiB/profundidade 3 |
 | `stage` | string 1..100 | sim | estágio de venda atual, ecoado sem validar a FSM |
 
@@ -63,6 +64,10 @@ Corpo JSON:
 **Regra de ouro (já implementada na engine):** a engine responde usando **só** `grounded_facts` +
 o que o cliente disse. Nunca inventa número/preço/data. `history` é contexto conversacional, **não**
 fonte de fato.
+`playbook` orienta a abordagem comercial e não fornece preço, data, vaga ou condição.
+`null`, tipo não string, UTF-8 inválido e mais de 2.048 bytes retornam 422 antes
+de criar task. A ausência do campo ainda aceita o arquivo global para callers
+antigos; o LATE novo sempre envia a chave, inclusive `""`.
 
 ---
 
